@@ -26,18 +26,13 @@ class Admin(unittest.TestCase):
             value["epoch"] = 2
             new = Path(d) / "new.json"
             new.write_text(json.dumps(value))
-            original = call
-
-            def fail_witness(args, value=None):
-                if "witness/state" in str(args):
-                    raise RuntimeError("synthetic unavailable witness")
-                return original(args, value)
-
-            with (
-                patch("witness_workflow.call", side_effect=fail_witness),
-                self.assertRaises(RuntimeError),
-            ):
-                install_trust(home, new)
+            # An unavailable witness store fails the update after the receiver.
+            (home / "witness/state").rename(home / "witness/offline")
+            try:
+                with self.assertRaises(RuntimeError):
+                    install_trust(home, new)
+            finally:
+                (home / "witness/offline").rename(home / "witness/state")
             self.assertEqual(json.loads((home / "trust.json").read_text())["epoch"], 1)
             self.assertEqual(install_trust(home, new)["installed_epoch"], 2)
 

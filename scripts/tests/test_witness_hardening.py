@@ -5,7 +5,6 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 from witness_workflow import Broker, initialize, call, upgrade_trust, renew
-from witness_mcp import dispatch
 from witness_client import Client
 
 
@@ -36,22 +35,14 @@ class Hardening(unittest.TestCase):
             self.assertEqual(r["status"], "local_consistency_check")
             self.assertEqual(r["verification_status"], "local_consistency_verified")
             self.assertNotIn(str(self.h), json.dumps(r))
-        request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "document_commit",
-                "arguments": {"proposal_id": identity},
-            },
-        }
-        with patch.object(
-            self.b,
-            "commit",
-            side_effect=RuntimeError("/private/secret/path sensitive stderr"),
-        ):
-            r = dispatch(self.b, request, True)
-        self.assertEqual(r["content"][0]["text"], "operation_failed")
+        # A failure reaches the agent as a fixed code, never a path or stderr.
+        with Client(self.h) as client:
+            r = client.rpc(
+                "tools/call",
+                {"name": "document_commit", "arguments": {"proposal_id": "ab" * 32}},
+            )
+        self.assertTrue(r["isError"])
+        self.assertEqual(r["content"][0]["text"], "proposal_unavailable")
 
     def test_legacy_home_requires_explicit_upgrade_before_effect(self):
         identity = self.approve()

@@ -1,8 +1,59 @@
 #!/usr/bin/env python3
-"""Verify an extracted archive offline with independently supplied trust."""
+"""Verify an extracted archive offline with independently supplied trust.
+Runs a separately obtained Go verifier; nothing from the archive is executed."""
 
-import argparse, json, sys
-from history_viewer import verify
+import argparse, datetime, hashlib, json, re, subprocess, sys, time
+from pathlib import Path
+
+
+def verify(directory, root, checkpoint, binary, out):
+    directory = Path(directory).resolve()
+    checkpoint = Path(checkpoint).resolve()
+    binary = Path(binary).resolve()
+    out = Path(out).resolve()
+    if not re.fullmatch("[0-9a-f]{64}", root):
+        raise ValueError("Root must be a separately trusted 32-byte public key")
+    if binary.is_relative_to(directory):
+        raise ValueError("Use a verifier obtained separately from the evidence archive")
+    if checkpoint.is_relative_to(directory):
+        raise ValueError(
+            "Supply the checkpoint from your separate trusted channel, outside the archive"
+        )
+    out.mkdir(parents=True, exist_ok=False, mode=0o700)
+    now = int(time.time())
+    r = subprocess.run(
+        [
+            str(binary),
+            "verify-archive",
+            root,
+            str(checkpoint),
+            str(directory),
+            str(now),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    result = {
+        "status": "rejected",
+        "checked_at": datetime.datetime.fromtimestamp(
+            now, datetime.timezone.utc
+        ).isoformat(),
+        "trusted_genesis_root": root,
+        "independent_operators_established": False,
+        "physical_effects_proven": False,
+    }
+    if r.returncode == 0:
+        checked = json.loads(r.stdout)
+        if checked.get("status") not in [
+            "portable_history_verified",
+            "unknown_due_to_disclosed_gap",
+        ]:
+            raise ValueError("Unexpected verifier response")
+        result.update(checked)
+    result["verifier_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+    (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+    return result
 
 
 def main():

@@ -14,8 +14,8 @@ operating-system accounts on the same computer.
 |---|---|
 | Receiver and witness keys are files in the owner home. | Each key is readable only by its service account. The owner home keeps no role keys. |
 | Receiver and witness state are SQLite files the owner can write. | Each state is owned by its service account, mode 700. |
-| The owner app runs the role commands itself. | The owner app reaches each role only through the bounded mTLS role service on `127.0.0.1`. Every change still passes the receiver's approval and passkey checks. |
-| Role code runs from the checkout. | Role code and its Python runtime are root-owned copies. `install` refuses to continue if the owner account can change them. |
+| The owner app runs the role commands itself. | The owner app reaches each role only through the bounded mTLS role service (`openproof-witness serve-role`, TLS 1.3, client certificate pinned) on `127.0.0.1`. Every change still passes the receiver's approval and passkey checks. |
+| Role code runs from the checkout. | The services run one root-owned copy of the `openproof-witness` binary. No interpreter or downloaded package is involved. `install` refuses to continue if the owner account can change the role location. |
 
 The owner keeps the approval gate, the authority key and the root key. Trust
 epochs (passkey set-up, `renew`) still work: the role services install a
@@ -45,12 +45,11 @@ replace a pinned owner passkey, and the service refuses a change of role keys.
    sudo outputs/local-venv/bin/python scripts/local_roles.py install --home outputs/passkey-trial
    ```
 
+   If your login is a standard account, run it through the administrator
+   account with `su ADMIN -c 'sudo …'` and full paths.
+
    The install:
-   - downloads a pinned Python runtime (python-build-standalone 3.12.13) and
-     checks its SHA-256. Apple's `/usr/bin/python3` uses LibreSSL without
-     TLS 1.3, so it is not used;
-   - installs the role code and the `cryptography` package under
-     `/private/var/db/openproof/` as root;
+   - copies the `openproof-witness` binary to `/private/var/db/openproof/libexec/` as root;
    - creates the hidden accounts `_openproofrcv` and `_openproofwit`;
    - copies the role keys and state, makes TLS certificates, and starts two
      launchd daemons (`com.antagon.openproof.receiver`, `.witness`) on ports
@@ -60,7 +59,7 @@ replace a pinned owner passkey, and the service refuses a change of role keys.
 
    If any step fails, the install undoes its changes and the owner home stays
    as it was.
-5. Start the owner app as usual.
+5. Start the owner app as usual. To move an existing install to a new binary, run `uninstall`, then `install` again.
 
 ## Check
 
@@ -87,6 +86,6 @@ removes the accounts and the role code.
 
 `scripts/tests/test_local_roles.py` runs the full install, workflow, trust
 renewal, separation probe and uninstall with real accounts. It runs only as
-root on Linux with `OPENPROOF_ROLE_ACCOUNT_TEST=1` and a root-owned Python in
-`OPENPROOF_ROLE_PYTHON`. The macOS account and launchd steps are not covered
-by automated tests; check them with `status` after install.
+root on Linux with `OPENPROOF_ROLE_ACCOUNT_TEST=1`. The macOS account and
+launchd steps were checked on a Mac on 8 Nov 2026; confirm them with `status`
+after every install.

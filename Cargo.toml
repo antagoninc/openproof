@@ -6,7 +6,7 @@ resolver = "2"
 version = "0.9.0"
 edition = "2021"
 license = "Apache-2.0"
-rust-version = "1.85"
+rust-version = "1.89"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -20,5 +20,6 @@ proptest = "=1.11.0"
 
 zeroize = "1"
 libc = "0.2"
-p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "std"] }
+p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "std", "pkcs8"] }
 base64 = "0.22.1"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "logging"] }

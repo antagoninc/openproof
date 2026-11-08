@@ -1,12 +1,11 @@
 """End-to-end test of separate role accounts (scripts/local_roles.py).
 
 This test creates real operating-system accounts, so it runs only as root on
-Linux and only when OPENPROOF_ROLE_ACCOUNT_TEST=1. Set OPENPROOF_ROLE_PYTHON to
-a root-owned Python 3.9+ interpreter. Installing the role code downloads the
-cryptography package.
+Linux and only when OPENPROOF_ROLE_ACCOUNT_TEST=1. The role services are the
+Rust binary; nothing is downloaded.
 """
 
-import json, os, platform, pwd, shutil, subprocess, sys, tempfile, unittest
+import json, os, platform, pwd, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -75,15 +74,18 @@ class LocalRolesTests(unittest.TestCase):
         self.temp.cleanup()
 
     def owner_app(self):
-        from owner_app import Owner
+        from owner_client import OwnerClient
 
-        return Owner(self.h)
+        return OwnerClient(self.h)
 
     def commit(self, document, version, content):
         o = self.owner_app()
-        identity = o.propose(document, version, content)["proposal_id"]
-        o.approve(identity, o.review(identity)["review_token"])
-        return o.broker.commit(identity)
+        try:
+            identity = o.propose(document, version, content)["proposal_id"]
+            o.approve(identity, o.review(identity)["review_token"])
+            return o.commit(identity)
+        finally:
+            o.close()
 
     def local_roles(self, command, user=None):
         python = sys.executable
@@ -96,8 +98,6 @@ class LocalRolesTests(unittest.TestCase):
         ]
         args += ["--base", str(BASE), "--manager", "manual", "--port", str(PORT)]
         args += ["--receiver-account", "optest-rcv", "--witness-account", "optest-wit"]
-        if command == "install":
-            args += ["--python", os.environ["OPENPROOF_ROLE_PYTHON"]]
         r = subprocess.run(args, capture_output=True, text=True, user=user)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return json.loads(r.stdout[r.stdout.index("{") :])
@@ -114,6 +114,7 @@ class LocalRolesTests(unittest.TestCase):
         o = self.owner_app()
         self.assertEqual(o.current_version("report"), 1)
         self.assertEqual(o.current_version("absent"), 0)
+        o.close()
         result = self.commit("report", 1, "second")
         self.assertEqual(result["document_version"], 2)
         self.assertEqual(call(["head", self.h / "witness/state"])["count"], 2)

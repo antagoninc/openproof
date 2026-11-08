@@ -166,8 +166,6 @@ async function refresh() {
       ? "Incremental evidence enabled. Checkpoint completion is required before verification succeeds."
       : "Legacy full-package evidence. Enable incremental evidence to use bounded pages.";
   $("paging").hidden = s.paging;
-  $("resume").hidden = !s.paused || !s.rotation_resumable;
-  $("rotate").hidden = s.paused || s.remote_services;
   $("export").disabled = s.paused;
   $("passkey-status").textContent = s.passkey.configured
     ? "Passkey approvals are on for " +
@@ -315,36 +313,11 @@ action(async () => {
     : await api("session");
   csrf = session.csrf;
   await refresh();
-  const certificates = await api("certificates");
   say(
-    "Your local workspace is ready. Approval and execution are separate steps." +
-      (certificates.status === "attention" ||
-      certificates.status === "configuration_unreadable"
-        ? " Connection certificates need attention; check the Recovery center."
-        : ""),
+    "Your local workspace is ready. Approval and execution are separate steps.",
   );
 });
 
-$("rotate").onclick = () =>
-  action(async () => {
-    const confirmation = prompt(
-      "This changes the locally owned root, receiver and witness keys. All approved actions must be resolved first. Admission pauses until completion. This is not compromise recovery. Type ROTATE LOCAL KEYS to prepare.",
-    );
-    if (confirmation !== "ROTATE LOCAL KEYS") return;
-    await api("rotation/prepare", { confirmation });
-    say(
-      "Key change prepared. Admission is paused. Select Resume key change to apply or recover this exact plan.",
-    );
-    await refresh();
-  });
-$("resume").onclick = () =>
-  action(async () => {
-    await api("rotation/resume", {});
-    say(
-      "Planned key change completed. History and replay protection were retained.",
-    );
-    await refresh();
-  });
 $("export").onclick = () =>
   action(async () => {
     const r = await api("archive", {});
@@ -423,21 +396,21 @@ async function recoveryRefresh() {
   $("certificate-summary").textContent =
     r.tls.status === "local_roles_no_tls"
       ? "Local roles do not use TLS. Remote certificates remain their operators’ responsibility."
-      : r.tls.certificates
-          .map(
-            (c) =>
-              c.role +
-              " " +
-              (c.kind === "client"
-                ? "client certificate"
-                : "trust certificate") +
-              ": " +
-              certificateLabels[c.status] +
-              (c.not_after ? " · expires " + c.not_after : ""),
-          )
-          .join(" | ") || "Certificate configuration needs operator attention.";
-  if (r.rotation.status !== "not_paused") {
-    $("resume").hidden = !r.rotation.can_resume;
-  }
+      : r.tls.status === "local_role_services"
+        ? "The receiver and the witness run as separate role services. Check their certificates with local_roles.py status."
+        : r.tls.certificates
+            .map(
+              (c) =>
+                c.role +
+                " " +
+                (c.kind === "client"
+                  ? "client certificate"
+                  : "trust certificate") +
+                ": " +
+                certificateLabels[c.status] +
+                (c.not_after ? " · expires " + c.not_after : ""),
+            )
+            .join(" | ") ||
+          "Certificate configuration needs operator attention.";
 }
 $("recovery-refresh").onclick = () => action(recoveryRefresh);

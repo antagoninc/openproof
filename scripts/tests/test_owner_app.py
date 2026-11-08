@@ -1,14 +1,15 @@
+"""The Rust owner app over HTTP, as the browser uses it."""
+
 import os
-import hashlib, http.client, json, sqlite3, sys, tempfile, threading, unittest
+import hashlib, json, sqlite3, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from owner_app import Owner, Server, StaleVersion
 from witness_workflow import initialize, call, ref
 from paged_workflow import enable
 from portable_history import export_history
+from owner_client import OwnerClient
 
 
 class OwnerAppTests(unittest.TestCase):
@@ -17,15 +18,21 @@ class OwnerAppTests(unittest.TestCase):
         self.h = Path(self.temp.name) / "home"
         initialize(self.h)
         enable(self.h)
-        self.o = Owner(self.h)
+        self.o = OwnerClient(self.h)
 
     def tearDown(self):
+        self.o.close()
         self.temp.cleanup()
 
-    def proposed(self):
-        return self.o.broker.propose("report", 0, "<script>untrusted text</script>")[
-            "proposal_id"
-        ]
+    def proposed(self, document="report", version=0):
+        return self.o.broker.propose(
+            document, version, "<script>untrusted text</script>"
+        )["proposal_id"]
+
+    def approved(self, document="report", version=0):
+        identity = self.proposed(document, version)
+        self.o.approve(identity, self.o.review(identity)["review_token"])
+        return identity
 
     def test_review_binds_all_fields_and_is_one_use(self):
         identity = self.proposed()
@@ -42,48 +49,30 @@ class OwnerAppTests(unittest.TestCase):
         db.commit()
         db.close()
         # The gate refuses a stored proposal that no longer matches its id.
-        with self.assertRaisesRegex(RuntimeError, "does not match"):
-            self.o.approve(identity, review["review_token"])
         with self.assertRaises(ValueError):
+            self.o.approve(identity, review["review_token"])
+        # The review token was used up by the refused attempt.
+        with self.assertRaisesRegex(ValueError, "no longer valid"):
             self.o.approve(identity, review["review_token"])
         self.assertEqual(call(["head", self.h / "receiver/state"])["count"], 0)
 
-    def test_owner_form_refuses_a_stale_version(self):
-        self.assertEqual(self.o.current_version("report"), 0)
-        identity = self.proposed()
-        review = self.o.review(identity)
-        self.o.approve(identity, review["review_token"])
-        self.o.broker.commit(identity)
-        self.assertEqual(self.o.current_version("report"), 1)
-        # The owner form cannot create a proposal that could never execute.
-        with self.assertRaisesRegex(StaleVersion, "report is at version 1"):
-            self.o.propose("report", 0, "old base")
-        self.assertTrue(self.o.propose("report", 1, "new")["proposal_id"])
-        self.assertTrue(self.o.propose("fresh-doc", 0, "new")["proposal_id"])
-        # When the receiver cannot answer, the form does not guess.
-        self.assertIsNone(self.o.current_version("bad name"))
-
-    def test_paged_recovery_and_portable_history(self):
-        identity = self.proposed()
-        review = self.o.review(identity)
-        self.o.approve(identity, review["review_token"])
-        real = call
-
-        def interrupted(args, value=None):
-            if args[0] == "witness":
-                raise RuntimeError("synthetic outage")
-            return real(args, value)
-
-        with patch("witness_workflow.call", side_effect=interrupted):
-            first = self.o.broker.commit(identity)
+    def test_witness_outage_recovery_and_portable_history(self):
+        identity = self.approved()
+        key = self.h / "witness/key.secret"
+        key.chmod(0o644)
+        try:
+            first = self.o.commit(identity)
+        finally:
+            key.chmod(0o600)
         self.assertEqual(first["status"], "committed_unwitnessed")
-        recovered = self.o.broker.commit(identity)
+        recovered = self.o.call("recover", {"id": identity})
         self.assertEqual(recovered["verification_status"], "local_consistency_verified")
-        self.assertEqual(self.o.broker.commit(identity)["document_version"], 1)
+        self.assertNotIn("evidence_directory", recovered)
+        self.assertEqual(self.o.commit(identity)["document_version"], 1)
+        stages = {i["id"]: i["stage"] for i in self.o.status()["items"]}
+        self.assertEqual(stages[identity], "Verified locally")
         archive = Path(self.temp.name) / "archive"
         export_history(self.h, archive)
-        import subprocess, time
-
         root = ref.read(self.h / "root-public.json")["public_key"]
         cmd = [
             os.environ.get(
@@ -106,147 +95,83 @@ class OwnerAppTests(unittest.TestCase):
         (archive / "manifest.json").write_text(json.dumps(manifest))
         self.assertNotEqual(subprocess.run(cmd, capture_output=True).returncode, 0)
 
+    def test_archive_download_is_a_valid_zip(self):
+        import io, zipfile
+
+        identity = self.approved()
+        self.o.commit(identity)
+        r = self.o.call("archive", {})
+        status, headers, data = self.o.request(
+            "GET", r["download"], headers={"Cookie": "openproof_owner=" + self.o.token}
+        )
+        self.assertEqual(status, 200)
+        names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+        self.assertIn("manifest.json", names)
+        self.assertIn("checkpoint-copy.json", names)
+        self.assertFalse(r["trust_root_included"])
+
     def test_http_rejects_foreign_origin_missing_cookie_csrf_and_bad_host(self):
-        server = Server(self.o, 0)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
+        o = self.o
+        value = {"document": "report", "expected_version": 0, "content": "hello"}
+        self.assertEqual(
+            o.post(
+                "session",
+                {"token": o.token},
+                {"Origin": "https://attacker.example"},
+                auth=False,
+            )[0],
+            403,
+        )
+        self.assertEqual(
+            o.post(
+                "session", {"token": o.token}, {"Host": "attacker.example"}, auth=False
+            )[0],
+            403,
+        )
+        self.assertEqual(o.post("session", {"token": "wrong"}, auth=False)[0], 403)
+        self.assertEqual(o.post("propose", value, auth=False)[0], 403)
+        self.assertEqual(
+            o.post(
+                "propose", value, {"Cookie": "openproof_owner=" + o.token}, auth=False
+            )[0],
+            403,
+        )
+        self.assertEqual(
+            o.post("propose", value, {"X-OpenProof-CSRF": "0" * 64})[0], 403
+        )
+        # Duplicate keys and floats are refused before any route runs.
+        status, _, _ = o.request(
+            "POST",
+            "/api/propose",
+            '{"document":"a","document":"b","expected_version":0,"content":"x"}',
+            {
+                "Origin": o.origin,
+                "Content-Type": "application/json",
+                "Cookie": "openproof_owner=" + o.token,
+                "X-OpenProof-CSRF": o.csrf,
+            },
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(o.post("propose", value)[0], 200)
+        status, headers, _ = o.request("GET", "/")
+        headers = dict(headers)
+        self.assertEqual(status, 200)
+        self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+        self.assertEqual(o.request("GET", "/api/status")[0], 401)
 
-            def post(path, body, headers=None):
-                c = http.client.HTTPConnection("127.0.0.1", server.server_port)
-                h = {
-                    "Host": self.o.origin.removeprefix("http://"),
-                    "Origin": self.o.origin,
-                    "Content-Type": "application/json",
-                }
-                h.update(headers or {})
-                c.request("POST", "/api/" + path, json.dumps(body), h)
-                r = c.getresponse()
-                code = r.status
-                data = r.read()
-                c.close()
-                return code, data
-
-            self.assertEqual(
-                post(
-                    "session",
-                    {"token": self.o.token},
-                    {"Origin": "https://attacker.example"},
-                )[0],
-                403,
-            )
-            self.assertEqual(
-                post("session", {"token": self.o.token}, {"Host": "attacker.example"})[
-                    0
-                ],
-                403,
-            )
-            self.assertEqual(post("session", {"token": "wrong"})[0], 403)
-            self.assertEqual(post("session", {"token": self.o.token})[0], 200)
-            value = {"document": "report", "expected_version": 0, "content": "hello"}
-            self.assertEqual(post("propose", value)[0], 403)
-            self.assertEqual(
-                post("propose", value, {"Cookie": "openproof_owner=" + self.o.token})[
-                    0
-                ],
-                403,
-            )
-            self.assertEqual(
-                post(
-                    "propose",
-                    value,
-                    {
-                        "Cookie": "openproof_owner=" + self.o.token,
-                        "X-OpenProof-CSRF": self.o.csrf,
-                    },
-                )[0],
-                200,
-            )
-            auth = {
-                "Cookie": "openproof_owner=" + self.o.token,
-                "X-OpenProof-CSRF": self.o.csrf,
-            }
-            code, data = post("current-version", {"document": "report"}, auth)
-            self.assertEqual((code, json.loads(data)["version"]), (200, 0))
-            stale = dict(value, expected_version=3)
-            code, data = post("propose", stale, auth)
-            self.assertEqual(code, 409)
-            self.assertIn("report is at version 0", json.loads(data)["error"])
-        finally:
-            server.shutdown()
-            thread.join()
-            server.server_close()
+    def test_owner_form_refuses_a_stale_version(self):
+        self.assertEqual(self.o.current_version("report"), 0)
+        identity = self.approved()
+        self.o.commit(identity)
+        self.assertEqual(self.o.current_version("report"), 1)
+        status, data = self.o.post(
+            "propose", {"document": "report", "expected_version": 0, "content": "old"}
+        )
+        self.assertEqual(status, 409)
+        self.assertIn("report is at version 1", data["error"])
+        self.assertTrue(self.o.propose("report", 1, "new")["proposal_id"])
+        self.assertTrue(self.o.propose("fresh-doc", 0, "new")["proposal_id"])
 
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class RotationIntegration(unittest.TestCase):
-    setUp = OwnerAppTests.setUp
-    tearDown = OwnerAppTests.tearDown
-    proposed = OwnerAppTests.proposed
-
-    def test_interrupted_handover_resumes_and_archive_checks_both_epochs(self):
-        import owner_rotation, subprocess, time
-
-        identity = self.proposed()
-        r = self.o.review(identity)
-        self.o.approve(identity, r["review_token"])
-        self.o.broker.commit(identity)
-        original = ref.read(self.h / "genesis-root.json")["public_key"]
-        owner_rotation.prepare(self.h)
-        with self.assertRaises(RuntimeError):
-            self.o.broker.propose("other", 0, "paused")
-        real = call
-
-        def interrupt(args, value=None):
-            if args[0] == "rotate-state" and "witness/state" in str(args):
-                raise RuntimeError("synthetic role outage")
-            return real(args, value)
-
-        with (
-            patch("owner_rotation.call", side_effect=interrupt),
-            self.assertRaises(RuntimeError),
-        ):
-            owner_rotation.resume(self.h)
-        self.assertTrue((self.h / "rotation-pending.json").exists())
-        self.assertTrue(owner_rotation.resume(self.h)["completed"])
-        self.assertEqual(self.o.broker.commit(identity)["document_version"], 1)
-        nextid = self.o.broker.propose("report", 1, "After planned handover")[
-            "proposal_id"
-        ]
-        r = self.o.review(nextid)
-        self.o.approve(nextid, r["review_token"])
-        self.assertEqual(self.o.broker.commit(nextid)["document_version"], 2)
-        archive = Path(self.temp.name) / "rotated-archive"
-        export_history(self.h, archive)
-        cmd = [
-            os.environ.get(
-                "OPENPROOF_GO_VERIFY", str(ROOT / "outputs/v0.9/openproof-go-verify")
-            ),
-            "verify-archive",
-            original,
-            str(archive / "checkpoint-copy.json"),
-            str(archive),
-            str(int(time.time())),
-        ]
-        checked = subprocess.run(cmd, capture_output=True)
-        self.assertEqual(checked.returncode, 0, checked.stderr)
-        wrong = list(cmd)
-        wrong[2] = ref.read(self.h / "root-public.json")["public_key"]
-        self.assertNotEqual(subprocess.run(wrong, capture_output=True).returncode, 0)
-        manifest = ref.read(archive / "manifest.json")
-        rotation = next(
-            x
-            for x in manifest["entries"]
-            if ref.read(archive / x["file"])["kind"] == "handover"
-        )
-        record = ref.read(archive / rotation["file"])
-        record["handover"]["new_witness"]["signature"] = "00" * 64
-        (archive / rotation["file"]).write_text(json.dumps(record))
-        rotation["sha256"] = hashlib.sha256(
-            (archive / rotation["file"]).read_bytes()
-        ).hexdigest()
-        (archive / "manifest.json").write_text(json.dumps(manifest))
-        self.assertNotEqual(subprocess.run(cmd, capture_output=True).returncode, 0)

@@ -1,5 +1,5 @@
 import os
-import contextlib, hashlib, http.client, io, json, subprocess, sys, tempfile, threading, time, unittest
+import base64, contextlib, hashlib, io, json, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -7,12 +7,22 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from owner_app import Owner, Server, b64encode, b64decode
 from witness_workflow import initialize, call, ref, renew
 from paged_workflow import enable
 from portable_history import export_history
+from owner_client import OwnerClient
 
-ORIGIN = "http://localhost:8765"
+ORIGIN = None  # Set per test from the running owner app.
+
+
+def b64encode(raw):
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def b64decode(text):
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
 GO = os.environ.get(
     "OPENPROOF_GO_VERIFY", str(ROOT / "outputs/v0.9/openproof-go-verify")
 )
@@ -36,12 +46,12 @@ class SoftAuthenticator:
         rp = hashlib.sha256(self.rp_id.encode()).digest()
         return rp + bytes([self.flags]) + b"\0\0\0\0"
 
-    def client(self, kind, challenge, origin=ORIGIN, extra=None):
-        data = dict(type=kind, challenge=challenge, origin=origin)
+    def client(self, kind, challenge, origin=None, extra=None):
+        data = dict(type=kind, challenge=challenge, origin=origin or ORIGIN)
         data.update(extra or {})
         return json.dumps(data, separators=(",", ":")).encode()
 
-    def register(self, begin, origin=ORIGIN, kind="webauthn.create"):
+    def register(self, begin, origin=None, kind="webauthn.create"):
         spki = self.key.public_key().public_bytes(
             serialization.Encoding.DER,
             serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -54,7 +64,7 @@ class SoftAuthenticator:
             algorithm=-7,
         )
 
-    def assert_(self, challenge, origin=ORIGIN, kind="webauthn.get", extra=None):
+    def assert_(self, challenge, origin=None, kind="webauthn.get", extra=None):
         client = self.client(kind, challenge, origin, extra)
         auth = self.auth_data()
         signed = auth + hashlib.sha256(client).digest()
@@ -72,11 +82,13 @@ class PasskeyTests(unittest.TestCase):
         self.h = Path(self.temp.name) / "home"
         initialize(self.h)
         enable(self.h)
-        self.o = Owner(self.h)
-        self.o.origin = ORIGIN
+        self.o = OwnerClient(self.h)
+        global ORIGIN
+        ORIGIN = self.o.origin
         self.device = SoftAuthenticator()
 
     def tearDown(self):
+        self.o.close()
         self.temp.cleanup()
 
     def register(self):
@@ -116,33 +128,23 @@ class PasskeyTests(unittest.TestCase):
         ]
         return archive, cmd, subprocess.run(cmd, capture_output=True)
 
-    def test_base64url_is_strict(self):
-        self.assertEqual(b64decode(b64encode(b"\xff\xfe"), 2), b"\xff\xfe")
-        for bad in ["", "a", "ab==", "a+b/", "_x", "ab c"]:
-            with self.assertRaises(ValueError):
-                b64decode(bad, 64)
-        with self.assertRaises(ValueError):
-            b64decode(b64encode(b"x" * 3), 2)
-
     def test_registration_challenge_checks_and_new_trust_epoch(self):
         epoch = ref.read(self.h / "trust.json")["epoch"]
         begin = self.o.register_begin()
         self.assertEqual(begin["rp_id"], "localhost")
-        self.assertEqual(len(b64decode(begin["challenge"], 32)), 32)
+        self.assertEqual(len(b64decode(begin["challenge"])), 32)
         bad = [
-            self.device.register(dict(challenge=b64encode(b"\0" * 32))),
-            self.device.register(begin, kind="webauthn.get"),
-            self.device.register(begin, origin="http://127.0.0.1:8765"),
-            SoftAuthenticator(flags=0x01).register(begin),
-            SoftAuthenticator(rp_id="example.com").register(begin),
-            dict(self.device.register(begin), algorithm=-257),
+            lambda b: self.device.register(dict(challenge=b64encode(b"\0" * 32))),
+            lambda b: self.device.register(b, kind="webauthn.get"),
+            lambda b: self.device.register(b, origin="http://127.0.0.1:8765"),
+            lambda b: SoftAuthenticator(flags=0x01).register(b),
+            lambda b: SoftAuthenticator(rp_id="example.com").register(b),
+            lambda b: dict(self.device.register(b), algorithm=-257),
         ]
-        for value in bad:
-            self.o.registration = dict(
-                challenge=begin["challenge"], time=time.monotonic()
-            )
+        for make in bad:
+            # Every attempt, accepted or not, uses up the registration challenge.
             with self.assertRaises(ValueError):
-                self.o.register_finish(value)
+                self.o.register_finish(make(self.o.register_begin()))
         self.assertNotIn("owner_passkey", ref.read(self.h / "trust.json"))
         with self.assertRaises(ValueError):
             self.o.register_finish(self.device.register(begin))
@@ -159,7 +161,7 @@ class PasskeyTests(unittest.TestCase):
             dict(
                 public_key=point.hex(),
                 rp_id="localhost",
-                origin=ORIGIN,
+                origin=self.o.origin,
                 from_sequence=1,
             ),
         )
@@ -182,7 +184,7 @@ class PasskeyTests(unittest.TestCase):
         path.write_text(json.dumps(stripped))
         from witness_workflow import install_trust
 
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(RuntimeError, "cannot be removed"):
             install_trust(self.h, path)
         # A stolen root key alone cannot drop the passkey from installed states.
         signed = call(["sign-trust-untracked", self.h / "root/key.secret"], stripped)
@@ -243,23 +245,24 @@ class PasskeyTests(unittest.TestCase):
     def test_missing_or_invalid_assertion_cannot_execute(self):
         self.register()
         identity, challenge = self.approve()
-        token = challenge["assertion_token"]
         with self.assertRaises(ValueError):
             self.o.approve_passkey(identity, "0" * 64, {})
         bad = [
-            self.device.assert_(b64encode(b"\0" * 32)),
-            self.device.assert_(challenge["challenge"], origin="http://localhost:1"),
-            self.device.assert_(challenge["challenge"], kind="webauthn.create"),
-            self.device.assert_(challenge["challenge"], extra={"crossOrigin": True}),
-            SoftAuthenticator().assert_(challenge["challenge"]),
-            SoftAuthenticator(flags=0x01).assert_(challenge["challenge"]),
+            lambda c: self.device.assert_(b64encode(b"\0" * 32)),
+            lambda c: self.device.assert_(c, origin="http://localhost:1"),
+            lambda c: self.device.assert_(c, kind="webauthn.create"),
+            lambda c: self.device.assert_(c, extra={"crossOrigin": True}),
+            lambda c: SoftAuthenticator().assert_(c),
+            lambda c: SoftAuthenticator(flags=0x01).assert_(c),
         ]
-        pending = dict(self.o.assertions[token])
-        for assertion in bad:
-            # Each rejected attempt consumes the pending approval; restore it.
-            self.o.assertions[token] = dict(pending, time=time.monotonic())
-            with self.assertRaises((ValueError, RuntimeError)):
-                self.o.approve_passkey(identity, token, assertion)
+        for make in bad:
+            # Each rejected attempt uses up the pending approval; approve again.
+            review = self.o.review(identity)
+            again = self.o.approve(identity, review["review_token"])
+            with self.assertRaises(ValueError):
+                self.o.approve_passkey(
+                    identity, again["assertion_token"], make(again["challenge"])
+                )
             self.assertEqual(self.gate_state(identity), "awaiting_passkey")
         # A process that can read the authority key signs a request without a passkey.
         proposal = self.o.broker.review(identity)["proposal"]
@@ -282,10 +285,13 @@ class PasskeyTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "challenge"):
             self.receive(copied)
-        self.o.assertions[token] = dict(pending, time=time.monotonic())
-        with self.assertRaisesRegex(RuntimeError, "challenge"):
+        review = self.o.review(identity)
+        again = self.o.approve(identity, review["review_token"])
+        with self.assertRaises(ValueError):
             self.o.approve_passkey(
-                identity, token, self.device.assert_(other_challenge["challenge"])
+                identity,
+                again["assertion_token"],
+                self.device.assert_(other_challenge["challenge"]),
             )
         self.assertEqual(call(["head", self.h / "receiver/state"])["count"], 0)
         with self.assertRaises(RuntimeError):
@@ -337,77 +343,61 @@ class PasskeyTests(unittest.TestCase):
         self.assertNotEqual(subprocess.run(cmd, capture_output=True).returncode, 0)
 
     def test_http_routes_use_localhost_origin(self):
-        server = Server(self.o, 0)
         self.assertTrue(self.o.origin.startswith("http://localhost:"))
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            host = self.o.origin.removeprefix("http://")
-
-            def post(path, body, extra=None):
-                c = http.client.HTTPConnection("127.0.0.1", server.server_port)
-                headers = {
-                    "Host": host,
-                    "Origin": self.o.origin,
-                    "Content-Type": "application/json",
-                    "Cookie": "openproof_owner=" + self.o.token,
-                    "X-OpenProof-CSRF": self.o.csrf,
-                }
-                headers.update(extra or {})
-                c.request("POST", "/api/" + path, json.dumps(body), headers)
-                r = c.getresponse()
-                data = json.loads(r.read())
-                c.close()
-                return r.status, data
-
-            ip = "127.0.0.1:" + str(server.server_port)
-            self.assertEqual(post("passkey/register/begin", {}, {"Host": ip})[0], 403)
-            code, begin = post("passkey/register/begin", {})
-            self.assertEqual(code, 200)
-            code, result = post(
-                "passkey/register/finish",
-                self.device.register(begin, origin=self.o.origin),
-            )
-            self.assertEqual(code, 200, result)
-            code, value = post(
-                "propose",
-                {"document": "report", "expected_version": 0, "content": "http text"},
-            )
-            review = post("review", {"id": value["proposal_id"]})[1]
-            code, challenge = post(
-                "approve",
-                {"id": value["proposal_id"], "review_token": review["review_token"]},
-            )
-            self.assertEqual(challenge["status"], "passkey_required")
-            body = {
-                "id": value["proposal_id"],
-                "assertion_token": challenge["assertion_token"],
-                "assertion": self.device.assert_(
-                    b64encode(b"\1" * 32), origin=self.o.origin
-                ),
-            }
-            self.assertEqual(post("approve/passkey", body)[0], 409)
-            review = post("review", {"id": value["proposal_id"]})[1]
-            code, challenge = post(
-                "approve",
-                {"id": value["proposal_id"], "review_token": review["review_token"]},
-            )
-            body["assertion_token"] = challenge["assertion_token"]
-            body["assertion"] = self.device.assert_(
-                challenge["challenge"], origin=self.o.origin
-            )
-            self.assertEqual(
-                post("approve/passkey", body),
-                (200, {"status": "approved", "id": value["proposal_id"]}),
-            )
-            code, result = post("commit", {"id": value["proposal_id"]})
-            self.assertEqual(
-                result["verification_status"], "local_consistency_verified"
-            )
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join()
+        post = self.o.post
+        ip = "127.0.0.1:" + str(self.o.port)
+        self.assertEqual(post("passkey/register/begin", {}, {"Host": ip})[0], 403)
+        code, begin = post("passkey/register/begin", {})
+        self.assertEqual(code, 200)
+        code, result = post("passkey/register/finish", self.device.register(begin))
+        self.assertEqual(code, 200, result)
+        code, value = post(
+            "propose",
+            {"document": "report", "expected_version": 0, "content": "http text"},
+        )
+        review = post("review", {"id": value["proposal_id"]})[1]
+        code, challenge = post(
+            "approve",
+            {"id": value["proposal_id"], "review_token": review["review_token"]},
+        )
+        self.assertEqual(challenge["status"], "passkey_required")
+        body = {
+            "id": value["proposal_id"],
+            "assertion_token": challenge["assertion_token"],
+            "assertion": self.device.assert_(b64encode(b"\1" * 32)),
+        }
+        self.assertEqual(post("approve/passkey", body)[0], 409)
+        review = post("review", {"id": value["proposal_id"]})[1]
+        code, challenge = post(
+            "approve",
+            {"id": value["proposal_id"], "review_token": review["review_token"]},
+        )
+        body["assertion_token"] = challenge["assertion_token"]
+        body["assertion"] = self.device.assert_(challenge["challenge"])
+        self.assertEqual(
+            post("approve/passkey", body),
+            (200, {"status": "approved", "id": value["proposal_id"]}),
+        )
+        code, result = post("commit", {"id": value["proposal_id"]})
+        self.assertEqual(result["verification_status"], "local_consistency_verified")
+        # The passkey binds the port: a restart on another port is refused.
+        self.o.close()
+        bad = subprocess.run(
+            [
+                str(ROOT / "target/debug/openproof-witness"),
+                "owner-app",
+                "--home",
+                str(self.h),
+                "--port",
+                str(self.o.port + 1),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertIn("registered for", bad.stderr)
+        self.o = OwnerClient(self.h)
+        self.assertEqual(self.o.origin, ORIGIN)
 
 
 if __name__ == "__main__":

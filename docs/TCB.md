@@ -12,9 +12,10 @@ removes trusted code.
 
 OpenProof's main path is the witnessed document workflow:
 
-1. An agent **proposes** a change to a document (MCP tool or broker call).
-2. The owner **reviews** the exact content in the local owner app and
-   **approves** it. The Rust approval gate (`gate.rs`) makes this decision.
+1. An agent **proposes** a change to a document (`openproof-witness mcp`).
+2. The owner **reviews** the exact content in the local owner app
+   (`openproof-witness owner-app`) and **approves** it. The Rust approval gate
+   (`gate.rs`) makes this decision.
    It signs only the stored proposal whose review binding the owner saw.
    Approval signs the exact document, version, content hash, receiver and a
    single-use nonce, valid for at most 10 minutes. With an owner passkey, the
@@ -39,36 +40,41 @@ experiment. See "Outside the trusted code" below.
 
 ## Trusted code by guarantee
 
+Everything on the main path is one Rust binary, `openproof-witness`, plus the
+owner app page it serves and the separate Go verifier.
+
 | File | Lines | G1 | G2 | G3 | Role |
 |---|---:|:-:|:-:|:-:|---|
 | `crates/openproof-core/src/lib.rs` | 320 | ✓ | ✓ | | Canonical bytes (OPEC-1), domain-separated Ed25519 signatures, strict parsing |
-| `crates/openproof-witness/src/lib.rs` | 798 | ✓ | ✓ | | Trust configuration, approvals, receiver admission and replay state, receipts, witness checkpoints |
-| `crates/openproof-witness/src/gate.rs` | 588 | ✓ | | | Approval gate: proposal store, review binding, approval signing, passkey-pending approvals, approved store checked on read, import of earlier homes |
+| `crates/openproof-witness/src/lib.rs` | 766 | ✓ | ✓ | | Trust configuration, approvals, receiver admission and replay state, receipts, witness checkpoints |
+| `crates/openproof-witness/src/gate.rs` | 585 | ✓ | | | Approval gate: proposal store, review binding, approval signing, passkey-pending approvals, approved store checked on read |
 | `crates/openproof-witness/src/passkey.rs` | 254 | ✓ | | | Owner passkey: trust field validation, WebAuthn assertion check, passkey pin |
-| `crates/openproof-witness/src/main.rs` | 391 | ✓ | ✓ | | Command dispatcher; private-key file reads; assertion pre-check |
-| `crates/openproof-witness/src/pages.rs` | 290 | | ✓ | | Bounded history pages (enabled by the owner app) |
+| `crates/openproof-witness/src/main.rs` | 468 | ✓ | ✓ | | Command dispatcher, private-key file reads, in-process calls |
+| `crates/openproof-witness/src/broker.rs` | 770 | ✓ | ✓ | | Home lock, propose, execute an approved request, witness catch-up, evidence pages, trust epochs, history export |
+| `crates/openproof-witness/src/owner_app.rs` | 808 | ✓ | | | Owner app: loopback HTTP, session, CSRF, Host and Origin checks, one-use review and assertion tokens, passkey registration checks |
+| `crates/openproof-witness/src/http.rs` | 202 | ✓ | ✓ | | Bounded HTTP/1.1 parsing; strict JSON (no duplicate keys or floats) |
+| `crates/openproof-witness/src/mcp.rs` | 138 | ✓ | | | Agent tools: propose and commit only, never approve |
+| `crates/openproof-witness/src/pages.rs` | 290 | | ✓ | | Bounded history pages |
 | `crates/openproof-witness/src/clock_recovery.rs` | 241 | ✓ | ✓ | | Signed-time floors and clock repair |
 | `crates/openproof-witness/src/verifier.rs` | 246 | | ✓ | | Rust history and checkpoint verification |
-| `scripts/witness_workflow.py` | 582 | ✓ | | | Broker: relays propose, review and approve to the gate; execution steps; key paths; home lock; passkey trust epoch |
-| `scripts/owner_app.py` | 580 | ✓ | | | Local owner app: session, CSRF, one-use review token, stale-version refusal, relays approvals and assertions to the gate, passkey registration |
-| `app/app.js`, `app/index.html` | 632 | ✓ | | | What the owner sees is what the owner approves; WebAuthn calls |
-| `scripts/witness_mcp.py` | 119 | ✓ | | | Agent-facing tools: propose and commit only, never approve |
-| `scripts/paged_workflow.py` | 88 | | ✓ | | Enables paging for the owner home |
+| `crates/openproof-witness/src/zip.rs` | 72 | | | | Stored ZIP writer for the evidence download (no reader) |
+| `app/app.js`, `app/index.html` | 603 | ✓ | | | What the owner sees is what the owner approves; WebAuthn calls |
 | `reference/go-witness/main.go`, `archive.go`, `passkey.go` | 752 | | | ✓ | Independent Go verifier of exported histories, including owner assertions |
-| `scripts/verify_history.py` | 19 | | | ✓ | Wrapper that runs the independently obtained Go verifier |
+| `scripts/verify_history.py` | 68 | | | ✓ | Wrapper that runs the independently obtained Go verifier |
 
 Trusted only when separate role accounts are installed ([LOCAL-ROLES.md](LOCAL-ROLES.md)):
 
 | File | Lines | G1 | G2 | G3 | Role |
 |---|---:|:-:|:-:|:-:|---|
-| `scripts/local_roles.py` | 841 | ✓ | ✓ | | Accounts, root-owned code and runtime, writability checks, key and state move, TLS, daemons, uninstall |
-| `scripts/role_service.py` | 251 | ✓ | ✓ | | Bounded mTLS role service; opt-in trust-epoch install that refuses role-key changes |
-| `scripts/role_transport.py` | 136 | ✓ | ✓ | | Owner-side mTLS client with fixed operations |
-| `scripts/certificate_lifecycle.py` | 259 | ✓ | ✓ | | Server TLS context checks (imported by the role service) |
+| `crates/openproof-witness/src/serve.rs` | 372 | ✓ | ✓ | | mTLS role service (rustls, TLS 1.3, client certificate pinned by fingerprint); opt-in trust-epoch install that refuses role-key changes |
+| `crates/openproof-witness/src/transport.rs` | 158 | ✓ | ✓ | | Owner-side mTLS client with a fixed operation mapping |
+| `scripts/local_roles.py` | 746 | ✓ | ✓ | | Installer: accounts, root-owned binary, writability checks, key and state move, TLS certificates, daemons, uninstall |
 
-Total trusted code: about 3,130 lines of Rust, 1,390 of Python, 630 of
-JavaScript/HTML and 750 of Go. The Rust total includes the `p256` and
-`base64` crates as dependencies (not counted here).
+Total trusted code: about 5,690 lines of Rust, 600 of JavaScript/HTML, 750 of
+Go and 70 of Python: about 7,110 lines. With separate role accounts, add 530
+lines of Rust and 750 of Python (the installer, which runs once as root).
+The Rust total uses the `p256`, `base64` and `rustls` (with `ring` and
+`webpki`) crates as dependencies (not counted here).
 
 The approval decision is in Rust. The gate signs only a stored proposal
 whose review binding matches the one the owner app passes back. With a
@@ -78,43 +84,32 @@ the approval digest verifies. Limits:
 - Without a passkey, code that runs as the owner can still call the gate and
   approve any stored proposal. The gate cannot tell an owner's click from a
   script. Such code can also read `authority/key.secret`.
-- The Python files above stay trusted for what the owner sees (the review
-  screen and its binding) and for passkey registration.
+- The owner app page (`app/`) stays trusted for what the owner sees.
 
 ## Outside the trusted code
 
-Build the experimental Rust parts with
-`cargo build --workspace --locked --features openproof-witness/experimental`.
-`scripts/validate.py` builds and tests both the default and the experimental
-build, and checks that the default binaries do not contain the experimental
-commands.
-
-These parts are useful but no guarantee above depends on them. They are
-**experimental** unless stated otherwise. They are not part of the default
-story in the README and are excluded from the first human audit scope.
+The experiments that used to be in this tree are kept, unchanged, at the git
+tag `experiments-2026-11-08` ([EXPERIMENTS.md](EXPERIMENTS.md)). No guarantee
+depends on them.
 
 | Area | Files | Status |
 |---|---|---|
-| Planned key handover (six-party) | `crates/openproof-witness/src/rotation.rs`, `crates/openproof-witness/src/cli_experimental.rs`, `scripts/owner_rotation.py`, `scripts/prepare_rotation.py` | Experimental; Cargo feature `experimental`, not in the default build |
-| Storage pilot (S3 conditional create) | `crates/openproof-witness/src/storage.rs`, `crates/openproof-witness/src/cli_experimental.rs`, `scripts/storage_adapter.py`, `scripts/storage_demo.py` | Experimental; Cargo feature `experimental`, not in the default build |
-| Remote role services (mTLS) | `scripts/role_service.py`, `scripts/role_transport.py`, `scripts/certificate_lifecycle.py`, `deployment/` | Experimental; trusted when separate role accounts are installed (listed above) or a witness runs remotely |
-| Archive retention | `scripts/archive_store.py` | Experimental |
-| Isolated report agent | `isolation/`, `scripts/isolated_agent.py`, `scripts/isolation_runner.py`, `scripts/claude_report.py` | Experimental demonstration |
-| Comparisons and labs | `scripts/compare_*.py`, `scripts/assurance_lab.py`, `scripts/operations_benchmark.py` | Measurement only |
+| Planned key handover and storage pilot formats | `crates/openproof-witness/src/rotation.rs`, `storage.rs`, `cli_experimental.rs` | Experimental; Cargo feature `experimental`, not in the default build |
 | Original v1 action bundles | `crates/openproof-trust`, `crates/openproof-runtime`, `crates/openproof-cli` | Kept for compatibility; not on the main path |
-| Viewers | `scripts/history_viewer.py`, `scripts/render_evidence.py` | Display only; output is marked unverified |
+| Python bindings and tools | `scripts/witness_workflow.py`, `scripts/paged_workflow.py`, `scripts/portable_history.py`, `scripts/witness_client.py`, conformance suites, `scripts/validate.py` | Call the binary for tests and tools; the legacy `upgrade-trust` migration stays here |
+| Tests | `scripts/tests/`, Rust test modules, `scripts/*_smoke.mjs` | Test material |
 
 ## Reduction plan
 
-1. Done. The approval gate is in the Rust binary (`gate.rs`, commands
-   `gate-propose`, `gate-review`, `gate-approve`, `gate-approve-terminal`,
-   `gate-approve-passkey`, `gate-approved`, `gate-list`). `owner_app.py` and
-   the broker keep HTTP, session, CSRF and the review token, and relay every
-   approval-state change to the gate.
+1. Done. The approval gate is in Rust (`gate.rs`).
 2. Done. `rotation.rs`, `storage.rs` and their commands are behind the Cargo
    feature `experimental`, off by default.
-3. Keep the trusted total under about 4,000 lines and record it here. Not
-   met: the total is about 5,900 lines, and about 7,390 with separate role
-   accounts installed. Step 1 added about 590 lines of Rust
-   and removed about 45 lines of Python. Next candidates: move passkey
-   registration checks out of `owner_app.py` into Rust, and shrink `lib.rs`.
+3. Done (8 Nov 2026). The owner app, broker, agent tools and role service
+   moved from Python to Rust; trusted Python fell from about 1,390 lines to
+   70 (plus the role-account installer). The experiments left the tree.
+4. Keep the trusted total under about 4,000 lines and record it here. Not
+   met: about 7,110 lines. The Rust port added lines while it removed the
+   Python interpreter and its packages from the trusted path. Next
+   candidates: shrink `owner_app.rs` and `broker.rs`, move the role-account
+   installer's certificate generation into Rust, and drop `zip.rs` in favour
+   of a plain folder export.

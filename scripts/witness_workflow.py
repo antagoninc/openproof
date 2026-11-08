@@ -1,33 +1,26 @@
 #!/usr/bin/env python3
-"""Owner CLI and narrowly scoped document broker. Agent tools cannot approve or select keys/paths.
-Proposals and approvals live in the Rust approval gate (gate-* commands); this module relays.
+"""Python bindings for the OpenProof binary, for tests, tools and the legacy
+trust upgrade. The broker, the owner app, the agent tools and the role
+services are in Rust (`openproof-witness`); this module only calls them.
 """
 
-import argparse, hashlib, json, os, re, subprocess, sys, time, uuid, fcntl
+import argparse, json, os, re, subprocess, sys, time, uuid, fcntl
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
-from isolation_runner import ENV
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "target/debug/openproof-witness"
 sys.path.insert(0, str(ROOT / "reference/python"))
 import openproof_ref as ref
 
+# The binary gets no inherited secrets: only the search path and home.
+ENV = {k: v for k, v in os.environ.items() if k in {"PATH", "HOME"}}
+
 
 def call(args, value=None):
-    # Only an owner-created home configuration enables transport. Agent arguments
-    # cannot choose destinations, certificate paths, keys or operation routes.
-    if len(args) > 1:
-        state = Path(str(args[1]))
-        if (
-            state.name == "state"
-            and state.parent.name in ["receiver", "witness"]
-            and (state.parent.parent / "service-client.json").exists()
-        ):
-            from role_transport import dispatch
-
-            return dispatch(state.parent.parent, state.parent.name, args, value)
+    # The binary sends role commands to the owner-configured role services
+    # itself when the home has a service-client.json.
     raw = (
         None
         if value is None
@@ -56,47 +49,7 @@ def save(path, value):
 
 
 def initialize(home):
-    home = Path(home).resolve()
-    home.mkdir(mode=0o700, parents=True, exist_ok=False)
-    keys = {}
-    for role in ["authority", "receiver", "witness"]:
-        folder = home / role
-        folder.mkdir(mode=0o700)
-        keys[role] = call(["keygen", folder / "key.secret"])["public_key"]
-        if role != "authority":
-            call(["init", folder / "state"])
-    (home / "evidence").mkdir(mode=0o700)
-    (home / "root").mkdir(mode=0o700)
-    root = call(["keygen", home / "root/key.secret"])["public_key"]
-    save(home / "root-public.json", {"public_key": root})
-    call(["verifier-init", home / "verifier", root])
-    call(["signer-init", home / "root/signer", root])
-    save(
-        home / "trust.json",
-        dict(
-            version="openproof-witness/1",
-            epoch=1,
-            expires_at=int(time.time()) + 86400,
-            previous_authorities=[],
-            revoked_authorities=[],
-            **keys,
-        ),
-    )
-    for role in ["receiver", "witness"]:
-        call(["role-pin", home / role / "state", root])
-    signed = call(
-        ["sign-trust", home / "root/key.secret", home / "root/signer"],
-        ref.read(home / "trust.json"),
-    )
-    save(home / "trust-signed.json", signed)
-    for role in ["receiver", "witness"]:
-        call(["install-signed", home / role / "state", root], signed)
-    call(["verifier-install", home / "verifier"], signed)
-    return {
-        "initialized": str(home),
-        "trust_expires_in_seconds": 86400,
-        "roles": "separate keys/processes/state; same host owner",
-    }
+    return call(["init-home", Path(home)])
 
 
 @contextmanager
@@ -142,31 +95,29 @@ def approved_request(home, identity):
 
 
 class Broker:
+    """Calls the Rust broker. Only `approve` (terminal approval) stays here."""
+
     def __init__(self, home):
         self.home = Path(home).resolve()
         if self.home.stat().st_mode & 0o077:
             raise ValueError("broker directory must be private")
 
-    @serialized
     def propose(self, document, expected_version, content):
-        require_admission(self.home)
         value = dict(document=document, expected_version=expected_version)
         try:
-            return call(["gate-propose", self.home], dict(value, content=content))
+            return call(["broker-propose", self.home], dict(value, content=content))
         except RuntimeError as e:
             raise ValueError(str(e)) from None
 
     def review(self, identity):
         """The exact proposal, its content SHA-256 and its review binding."""
-        with home_lock(self.home):
-            require_admission(self.home)
-            return call(["gate-review", self.home, checked(identity)])
+        return call(["broker-review", self.home, checked(identity)])
 
     def request(self, identity):
         return approved_request(self.home, identity)
 
     def approve(self, identity, *, reader=None):
-        # Capture exactly what is reviewed, then release the global lock during input.
+        # Capture exactly what is reviewed, then release the lock during input.
         # The gate signs only if the stored proposal still has this review binding.
         r = self.review(identity)
         digest = r["content_sha256"]
@@ -202,183 +153,16 @@ class Broker:
             "expires_at": q["expires_at"],
         }
 
-    @serialized
     def commit(self, identity, *, recover_only=False):
-        require_admission(self.home)
-        q = self.request(identity)
-        h = self.home
-        if not (h / "trust-signed.json").exists() or not (h / "verifier").is_dir():
-            raise RuntimeError("owner must run upgrade-trust before dispatch")
-        root = ref.read(h / "root-public.json")["public_key"]
-        if any(
-            call(["role-status", h / role / "state"])["root"] != root
-            for role in ["receiver", "witness"]
-        ):
-            raise RuntimeError("owner must run upgrade-trust before dispatch")
-        base = dict(
-            proposal_id=identity,
-            verification_scope="local_consistency_check",
-            independent_operators=False,
-            physical_effects_proven=False,
-        )
-        # Read-only recovery cannot authorize a new mutation. Current admission checks
-        # remain unchanged in receive, including expiry, retirement and revocation.
-        receipt = call(["recover", h / "receiver/state"], q)
-        if receipt is None:
-            if recover_only:
-                raise ValueError(
-                    "No durable receipt; recovery cannot execute an action"
-                )
-            if not evidence_capacity(h):
-                return dict(
-                    base,
-                    status="not_committed",
-                    execution_status="not_committed",
-                    verification_status="not_verified",
-                    error_code="evidence_storage_capacity",
-                )
-            try:
-                receipt = call(
-                    [
-                        "receive",
-                        h / "receiver/state",
-                        h / "receiver/key.secret",
-                        h / "trust.json",
-                    ],
-                    q,
-                )
-            except Exception:
-                # A lost reply may follow commit. Inspect durable state before reporting.
-                try:
-                    receipt = call(["recover", h / "receiver/state"], q)
-                except Exception:
-                    return dict(
-                        base,
-                        status="outcome_unknown",
-                        execution_status="unknown",
-                        verification_status="not_verified",
-                        error_code="receiver_response_unavailable",
-                    )
-                if receipt is None:
-                    return dict(
-                        base,
-                        status="not_committed",
-                        execution_status="not_committed",
-                        verification_status="not_verified",
-                        error_code="admission_failed",
-                    )
-        base.update(
-            execution_status="committed",
-            document=receipt["payload"]["document"],
-            document_version=receipt["payload"]["document_version"],
-        )
+        command = "broker-recover" if recover_only else "broker-commit"
         try:
-            target = call(["head", h / "receiver/state"])["count"]
-            start = call(["head", h / "witness/state"])["count"] + 1
-            if target - start > 4096:
-                raise RuntimeError("catch-up capacity")
-            for sequence in range(start, target + 1):
-                stored = call(["receipt", h / "receiver/state", sequence])
-                call(
-                    [
-                        "witness",
-                        h / "witness/state",
-                        h / "witness/key.secret",
-                        h / "trust.json",
-                    ],
-                    stored,
-                )
-            # Replaying this exact receipt obtains the witness's current signed head.
-            checkpoint = (
-                call(
-                    [
-                        "checkpoint",
-                        h / "witness/state",
-                        h / "witness/key.secret",
-                        h / "trust.json",
-                    ]
-                )
-                if (h / "paging.json").exists()
-                else call(
-                    [
-                        "witness",
-                        h / "witness/state",
-                        h / "witness/key.secret",
-                        h / "trust.json",
-                    ],
-                    receipt,
-                )
-            )
-        except Exception:
-            return dict(
-                base,
-                status="committed_unwitnessed",
-                verification_status="not_verified",
-                witness_status="confirmation_unavailable",
-                error_code="witness_recovery_required",
-            )
-        try:
-            if not evidence_capacity(h):
-                raise RuntimeError("evidence capacity")
-            if (h / "paging.json").exists():
-                from paged_workflow import finish_paged
-
-                return finish_paged(h, identity, checkpoint, base)
-            package = call(
-                ["export", h / "receiver/state", h / "trust.json"], checkpoint
-            )
-            # Pin comes directly from the configured witness; local custody is explicit.
-            scratch = h / ("checkpoint-" + uuid.uuid4().hex + ".json")
-            save(scratch, checkpoint)
-            try:
-                result = call(
-                    [
-                        "verify-trusted",
-                        h / "verifier",
-                        h / "trust-signed.json",
-                        scratch,
-                    ],
-                    package,
-                )
-            finally:
-                scratch.unlink(missing_ok=True)
-            result["evidence_status"] = result["status"]
-            if result["status"] != "unknown_due_to_disclosed_gap":
-                result["status"] = "local_consistency_check"
-            result.update(
-                base,
-                verification_status="local_consistency_verified",
-                witness_status="confirmed",
-            )
-            eid = hashlib.sha256(
-                json.dumps(
-                    [identity, checkpoint, ref.read(h / "trust-signed.json")],
-                    sort_keys=True,
-                ).encode()
-            ).hexdigest()
-            run = h / "evidence" / eid
-            if not run.exists():
-                import shutil
-
-                stage = h / "evidence" / (".pending-" + uuid.uuid4().hex)
-                stage.mkdir(mode=0o700)
-                try:
-                    save(stage / "checkpoint.json", checkpoint)
-                    save(stage / "package.json", package)
-                    save(stage / "assessment.json", result)
-                    stage.rename(run)
-                finally:
-                    if stage.exists():
-                        shutil.rmtree(stage)
-            return dict(result, evidence_id=eid, evidence_directory=str(run))
-        except Exception:
-            return dict(
-                base,
-                status="witnessed_evidence_failed",
-                witness_status="confirmed",
-                verification_status="not_verified",
-                error_code="evidence_export_or_verification_failed",
-            )
+            return call([command, self.home, checked(identity)])
+        except RuntimeError as e:
+            if "not approved" in str(e):
+                raise FileNotFoundError("proposal is not approved") from None
+            if "cannot execute" in str(e):
+                raise ValueError(str(e)) from None
+            raise
 
 
 def require_admission(home):
@@ -386,25 +170,12 @@ def require_admission(home):
         raise RuntimeError("planned key handover in progress; admission paused")
 
 
-def evidence_capacity(home):
-    # Reserve enough room for the next bounded package and its metadata.
-    evidence = Path(home) / "evidence"
-    entries = list(evidence.iterdir())
-    if len(entries) >= 1000:
-        return False
-    return (
-        sum(p.stat().st_size for p in evidence.rglob("*") if p.is_file())
-        <= 62 * 1024 * 1024
-    )
-
-
 def install_trust(home, configuration):
-    with home_lock(Path(home).resolve()):
-        return _install_trust(home, configuration)
+    return call(["install-trust", Path(home).resolve(), Path(configuration).resolve()])
 
 
 def _install_trust(home, configuration):
-    """Owner-only staged update. If one store fails, retry the same retained configuration."""
+    """Staged update for the legacy upgrade path only (caller holds the lock)."""
     home = Path(home).resolve()
     new = ref.read(configuration)
     old = ref.read(home / "trust.json")
@@ -430,37 +201,12 @@ def _install_trust(home, configuration):
 
 
 def renew(home):
-    home = Path(home).resolve()
-    with home_lock(home):
-        trust = authenticated_trust(home)
-        trust["epoch"] += 1
-        trust["expires_at"] = int(time.time()) + 86400
-        path = home / ("trust-update-" + uuid.uuid4().hex + ".json")
-        save(path, trust)
-        return _install_trust(home, path)
+    return call(["renew", Path(home).resolve()])
 
 
 def enroll_passkey(home, passkey):
-    """Issue a new root-signed trust epoch that requires the owner's passkey."""
-    home = Path(home).resolve()
-    with home_lock(home):
-        require_admission(home)
-        trust = authenticated_trust(home)
-        if "owner_passkey" in trust:
-            raise ValueError("an owner passkey is already installed")
-        # History up to the current receiver head was approved without a passkey.
-        head = call(["head", home / "receiver/state"])["count"]
-        trust["epoch"] += 1
-        trust["expires_at"] = int(time.time()) + 86400
-        trust["owner_passkey"] = dict(
-            public_key=passkey["public_key"],
-            rp_id=passkey["rp_id"],
-            origin=passkey["origin"],
-            from_sequence=head + 1,
-        )
-        path = home / ("trust-update-" + uuid.uuid4().hex + ".json")
-        save(path, trust)
-        return _install_trust(home, path)
+    """A new root-signed trust epoch that requires the owner's passkey."""
+    return call(["enroll-passkey", Path(home).resolve()], passkey)
 
 
 def authenticated_trust(home):

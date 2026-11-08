@@ -1,19 +1,14 @@
-"""Small synchronous Python SDK for the local MCP broker; no approval/signing API."""
+"""Small synchronous Python client for the Rust MCP broker; no approval/signing API."""
 
-import json, subprocess, sys
+import json, subprocess
 from pathlib import Path
-from isolation_runner import ENV
+from witness_workflow import BINARY, ENV
 
 
 class Client:
     def __init__(self, home):
         self.process = subprocess.Popen(
-            [
-                sys.executable,
-                str(Path(__file__).with_name("witness_mcp.py")),
-                "--home",
-                str(home),
-            ],
+            [str(BINARY), "mcp", str(Path(home).resolve())],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,

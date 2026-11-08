@@ -46,7 +46,7 @@ Experimental features are outside the guarantees and outside the first audit sco
 
 ## Quick start
 
-Use macOS or Linux with Rust/Cargo, Python 3.11 and Go installed. The repeatable CI configuration pins Rust **1.92.0** and Go **1.27.3**. Docker is needed only for container experiments.
+Use macOS or Linux with Rust/Cargo and Go installed. Python 3.11 is needed only for the tests and the setup helpers. The repeatable CI configuration pins Rust **1.92.0** and Go **1.27.3**.
 
 ```sh
 git clone https://github.com/antagoninc/openproof.git
@@ -55,9 +55,17 @@ cd openproof
 python3 scripts/quickstart.py
 ```
 
-The first-run command installs the pinned Python dependencies in a project-local environment, builds Rust and Go, runs eight synthetic assurance experiments, opens their interactive results, and starts a fresh owner workspace with an unapproved sample. No Docker or model account is needed. Use `--check --no-open` for a noninteractive check.
+The first-run command builds the Rust binary and the Go verifier and starts a fresh owner workspace with an unapproved sample. No model account is needed. Use `--check --no-open` to build only.
 
-On macOS, after setup, double-click **[Open OpenProof.command](Open%20OpenProof.command)**. The app uses a private local home under `outputs/owner-home` and listens only on loopback. Keep the terminal open while using it; Control-C stops the app. No external model call is made by startup or fixture demonstrations.
+Everything on the trusted path is one Rust binary, `openproof-witness`:
+
+| Command | What it runs |
+|---|---|
+| `openproof-witness owner-app --home HOME --open` | The local owner app: review, passkey approval, execution, evidence export |
+| `openproof-witness mcp HOME` | The MCP stdio server for agents: propose and commit only, never approve |
+| `openproof-witness serve-role ...` | The mTLS role service for a receiver or witness under its own account ([LOCAL-ROLES.md](docs/LOCAL-ROLES.md)) |
+
+On macOS, after setup, double-click **[Open OpenProof.command](Open%20OpenProof.command)**. The app uses a private local home under `outputs/owner-home` and listens only on loopback. Keep the terminal open while using it; Control-C stops the app.
 
 For a synthetic command-line demonstration:
 
@@ -67,13 +75,11 @@ outputs/local-venv/bin/python scripts/witness_demo.py --out outputs/my-demo
 
 Choose a new output directory for each demonstration. These examples simulate approval of public test content; they are not evidence of human approval of a real action.
 
-**[Owner guide →](docs/OWNER-APP.md)** · [Agent/MCP workflow](docs/WITNESSED-WORKFLOW.md) · [Authenticated services](docs/AUTHENTICATED-SERVICES.md)
+**[Owner guide →](docs/OWNER-APP.md)** · [Agent/MCP workflow](docs/WITNESSED-WORKFLOW.md) · [Separate role accounts](docs/LOCAL-ROLES.md)
 
-## Explore and verify
+## Verify offline
 
-The first-run experiment explorer shows altered content, substituted signers, duplicate receipts and omitted history rejected by real checks. An identical approved retry recovers the original receipt without another update. These are simulated approvals, not human consent.
-
-Evidence exports include a readable, script-free `viewer.html` and `VERIFY.txt`. The viewer is explicitly **unverified display**. Use your independently obtained Go verifier and separately trusted genesis root and current checkpoint to generate a fresh offline result:
+An evidence export contains the signed history, a checkpoint copy and `VERIFY.txt`. Use your independently obtained Go verifier and a separately trusted genesis root and current checkpoint:
 
 ```sh
 outputs/local-venv/bin/python scripts/verify_history.py EXTRACTED_ARCHIVE \
@@ -81,7 +87,7 @@ outputs/local-venv/bin/python scripts/verify_history.py EXTRACTED_ARCHIVE \
   --go-binary outputs/tooling/openproof-go-verify --out outputs/my-offline-check
 ```
 
-[Storage pilot](docs/STORAGE-PILOT.md) · [Archive retention](docs/ARCHIVAL.md) · [TRACE comparison scope](docs/COMPARISON.md) · [Daily operations and measurements](docs/OPERATIONS.md) · [Compatibility policy](docs/COMPATIBILITY.md) · [Controlled preview checklist](docs/RELEASE-CHECKLIST.md)
+[Compatibility policy](docs/COMPATIBILITY.md) · [Controlled preview checklist](docs/RELEASE-CHECKLIST.md) · [Experiments kept in history](docs/EXPERIMENTS.md)
 
 ## What the evidence means
 
@@ -93,24 +99,13 @@ outputs/local-venv/bin/python scripts/verify_history.py EXTRACTED_ARCHIVE \
 | Complete verified history | Required receipts/approvals connect under the selected trust and checkpoint | Protection when the caller also rolls back its trusted anchors |
 | Disclosed gap | The verifier identifies incomplete knowledge | Complete execution history |
 
-The owner UI, receiver and witness can run under one host account. That arrangement is useful for development, but it is **not independent custody**. Docker containers still share a host administrator. The service client can operate without root/receiver/witness private keys; separately administered infrastructure still requires actual operators and deployment work.
+By default the owner app, receiver and witness run under one host account. That is useful for development, but it is **not independent custody**. [Separate role accounts](docs/LOCAL-ROLES.md) keep the receiver and witness keys and state out of the owner account's reach on one computer. One administrator still controls every account, so independent witnessing still needs a separate operator.
 
 The Go verifier is separately implemented without calling Rust, but it shares project authorship. It is not an external audit. Its archive mode requires a separately trusted root, a current checkpoint and the actual current time. Planned migration is not compromised-key recovery.
 
 ## Validation
 
-The recorded v0.9 local milestone passed (the current branch adds passkey approvals; its local run on 8 Nov 2026 passed 141 Rust tests (145 with experimental features), the Go tests, 218 Go/Rust cross-implementation cases, 83 Python tests and both browser workflows on Linux):
-
-| Check | Recorded result |
-|---|---|
-| Rust workspace | **117 tests** on macOS and Linux |
-| Python workflows and boundaries | **57 tests** |
-| Cross-implementation cases | **520 cases** across evidence, trust and witness suites |
-| Browser workflow | Desktop and mobile review, approval, execution and retry |
-| Bounded fuzz campaigns | **4,390,141 executions**; the new stateful target covered only **78 sequences** |
-| Repeat Linux build | Identical witness executable bytes on the same host and pinned image |
-
-The initial private import also passed [Linux and macOS hosted validation](https://github.com/antagoninc/openproof/actions/runs/42453339807). That run covers its recorded commit; later changes require fresh validation. The [sanitized validation summary](docs/VALIDATION.md) explains scope and limitations. Generated logs, private keys, databases, browser sessions and runtime homes are deliberately excluded from Git.
+The local run on 8 Nov 2026 passed 145 Rust tests, the Go tests, the Go/Rust cross-implementation suites, 42 Python tests of the Rust owner app, MCP server, broker and role service, both browser workflows and the separate-role-account test on Linux. The earlier v0.9 milestone record is in the [sanitized validation summary](docs/VALIDATION.md), which explains scope and limitations. Generated logs, private keys, databases, browser sessions and runtime homes are deliberately excluded from Git.
 
 To run the complete validation, install `cargo-audit` and use a fresh directory:
 
@@ -126,11 +121,12 @@ The workflow performs checks and builds only. It does not publish packages, uplo
 | Path | Purpose | In the trusted code |
 |---|---|---|
 | `crates/openproof-core` | OPEC-1 canonical bytes, domain-separated signatures, strict parsing | Yes |
-| `crates/openproof-witness` | Document receiver, witness, passkey check, pages, history verifier | Yes, except `rotation.rs` and `storage.rs` |
+| `crates/openproof-witness` | Receiver, witness, approval gate, passkey check, broker, owner app, MCP server, role service | Yes, except `rotation.rs` and `storage.rs` |
+| `app` | The owner app's page and script, built into the binary | Yes (G1) |
 | `reference/go-witness` | Separate Go verifier of exported histories | Yes (G3) |
-| `app`, `scripts/owner_app.py`, `scripts/witness_workflow.py`, `scripts/witness_mcp.py` | Owner app, broker and agent tools | Yes (G1) |
+| `scripts/local_roles.py` | Installer for separate role accounts | Yes, when installed |
 | `crates/openproof-runtime`, `crates/openproof-trust`, `crates/openproof-cli` | Original v1 action bundles | No; kept for compatibility |
-| other `scripts`, `isolation`, `deployment` | Experiments, demonstrations, validation | No |
+| other `scripts` | Tests, conformance suites, validation and demonstrations | No |
 | `schemas` / `fixtures` / `fuzz` | Versioned formats, public synthetic evidence and fuzz targets | Test material |
 
 ## Documentation

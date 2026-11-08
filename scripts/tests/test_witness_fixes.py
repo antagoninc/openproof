@@ -42,15 +42,13 @@ class Fixes(unittest.TestCase):
     def test_outage_reports_committed_and_catches_up_without_receive(self):
         a = self.approved("a")
         b = self.approved("b")
-        real = call
-
-        def outage(args, value=None):
-            if args[0] == "witness":
-                raise RuntimeError("outage")
-            return real(args, value)
-
-        with patch("witness_workflow.call", side_effect=outage):
+        # A witness that cannot use its key is a witness outage.
+        key = self.h / "witness/key.secret"
+        key.chmod(0o644)
+        try:
             r = self.b.commit(a)
+        finally:
+            key.chmod(0o600)
         self.assertEqual(r["status"], "committed_unwitnessed")
         self.assertEqual(r["execution_status"], "committed")
         self.assertEqual(
@@ -60,14 +58,9 @@ class Fixes(unittest.TestCase):
         self.assertEqual(
             self.b.commit(b)["verification_status"], "local_consistency_verified"
         )
-
-        def no_redispatch(args, value=None):
-            if args[0] == "receive":
-                raise AssertionError("historical recovery attempted dispatch")
-            return real(args, value)
-
-        with patch("witness_workflow.call", side_effect=no_redispatch):
-            r = self.b.commit(a)
+        # Recovering an earlier commit never dispatches it again.
+        r = self.b.commit(a)
+        self.assertEqual(call(["head", self.h / "receiver/state"])["count"], 2)
         self.assertEqual(r["verification_status"], "local_consistency_verified")
         self.assertFalse(r["independent_operators"])
 
@@ -88,15 +81,22 @@ class Fixes(unittest.TestCase):
 
     def test_post_witness_export_failure_is_explicit(self):
         identity = self.approved()
-        real = call
-
-        def fail(args, value=None):
-            if args[0] == "export":
-                raise RuntimeError("export failure")
-            return real(args, value)
-
-        with patch("witness_workflow.call", side_effect=fail):
-            r = self.b.commit(identity)
+        # The receiver commits, then evidence storage is full.
+        call(
+            [
+                "receive",
+                self.h / "receiver/state",
+                self.h / "receiver/key.secret",
+                self.h / "trust.json",
+            ],
+            self.b.request(identity),
+        )
+        filler = [self.h / "evidence" / f"filler-{i}" for i in range(1000)]
+        for f in filler:
+            f.mkdir()
+        r = self.b.commit(identity)
+        for f in filler:
+            f.rmdir()
         self.assertEqual(r["status"], "witnessed_evidence_failed")
         self.assertEqual(r["execution_status"], "committed")
         self.assertEqual(

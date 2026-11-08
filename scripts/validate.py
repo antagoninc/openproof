@@ -8,7 +8,6 @@ ROOT = Path(__file__).resolve().parents[1]
 a = argparse.ArgumentParser()
 a.add_argument("--out", required=True)
 a.add_argument("--skip-audit", action="store_true")
-a.add_argument("--isolation-image-id-file")
 args = a.parse_args()
 out = Path(args.out).resolve()
 out.mkdir(parents=True, exist_ok=False)
@@ -61,7 +60,6 @@ run(
         "--quiet",
         "scripts",
         "reference/python",
-        "isolation",
     ],
 )
 run(
@@ -144,39 +142,13 @@ run(
     "assurance-demo",
     ["target/debug/openproof", "assurance-demo", out / "assurance-demo"],
 )
-# The Python suite also covers rotation and storage, so it needs the experimental build.
-run(
-    "debug-build-experimental",
-    ["cargo", "build", "--workspace", "--locked", *EXPERIMENTAL],
-)
+# The Python suite drives the default binary: owner app, MCP, broker, role service.
+run("debug-build-default", ["cargo", "build", "--workspace", "--locked"])
 run(
     "python-agent-tests",
     [sys.executable, "-m", "unittest", "discover", "-s", "scripts/tests", "-v"],
     env=dict(os.environ, OPENPROOF_GO_VERIFY=str(out / "openproof-go-verify")),
 )
-if args.isolation_image_id_file:
-    run(
-        "isolated-agent",
-        [
-            sys.executable,
-            "scripts/isolated_agent.py",
-            "--provider",
-            "fixture",
-            "--image-id-file",
-            args.isolation_image_id_file,
-            "--out",
-            out / "isolated-agent",
-        ],
-    )
-    run(
-        "isolation-failures",
-        [
-            sys.executable,
-            "scripts/exercise_isolation.py",
-            "--image-id-file",
-            args.isolation_image_id_file,
-        ],
-    )
 run("schema", [sys.executable, "scripts/check_schema.py"])
 run("fuzz-lock", [sys.executable, "scripts/check_fuzz_lock.py"])
 run("agent-pilot", [sys.executable, "scripts/agent_pilot.py", out / "agent-pilot"])
@@ -300,7 +272,7 @@ differential = re.search(
 
 RustSec audit: {'SKIPPED explicitly' if args.skip_audit else 'passed; database revision recorded in rustsec.json'}.
 Platform: {platform.platform()}.
-Python host adapter/viewer tests: passed. Container isolation pilot: {'passed' if args.isolation_image_id_file else 'not run by this invocation'}. External model calls: never made by this validation script.
+Python tests of the Rust owner app, MCP server, broker and role service: passed. External model calls: never made by this validation script.
 
 provenance.json links the executable SHA-256 to source-manifest.json, Cargo.lock, toolchain and build command. It is an unsigned local claim, not an independently verified attestation or SLSA level. The build is not hermetic; cross-host reproducibility is not established. No external security audit is claimed.
 """)

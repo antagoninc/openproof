@@ -28,7 +28,7 @@ Type the displayed `APPROVE <digest-prefix>` phrase to continue. Anything else c
 
 For a real report, configure `ANTHROPIC_API_KEY` in your environment and use `--provider claude`. This makes a paid report-generation request **before** the execution approval prompt; execution approval does not approve or cancel an already-made model call. Only the fixed public project summary is sent. Fixture mode is the default and has no model cost.
 
-The underlying `isolated_agent.py --approval demo` remains an explicit automated regression/demo path. It is not the daily human-approval path and must not be exposed as a human-approval enforcing endpoint. All host scripts and configuration remain trusted. The demo exercises denied variants before the allowed request; it is not a general agent tool service.
+Historical, for an experiment (kept at the git tag `experiments-2026-11-08`): The underlying `isolated_agent.py --approval demo` remains an explicit automated regression/demo path. It is not the daily human-approval path and must not be exposed as a human-approval enforcing endpoint. All host scripts and configuration remain trusted. The demo exercises denied variants before the allowed request; it is not a general agent tool service.
 
 ## Failure and recovery
 

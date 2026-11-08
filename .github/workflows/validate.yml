@@ -49,8 +49,3 @@ jobs:
           cargo install cargo-audit --version 0.22.2 --locked
       - name: Validate and create local provenance
         run: python scripts/validate.py --out outputs/ci-validation
-      - name: Exercise restricted worker (no paid model calls)
-        if: runner.os == 'Linux'
-        run: |
-          python scripts/build_isolation.py --out outputs/ci-worker-build
-          python scripts/isolated_agent.py --provider fixture --image-id-file outputs/ci-worker-build/image-id --out outputs/ci-isolation

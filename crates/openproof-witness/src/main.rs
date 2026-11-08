@@ -18,10 +18,44 @@ fn read(path: &str) -> Result<Vec<u8>> {
     }
     Ok(b)
 }
-fn input<T: serde::de::DeserializeOwned + Serialize>() -> Result<T> {
+thread_local! {
+    /// Input for an in-process command (role service, broker, owner app).
+    /// When unset, commands read standard input as before.
+    static INPUT: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
+}
+fn input_bytes() -> Result<Vec<u8>> {
+    if let Some(b) = INPUT.with(|i| i.borrow_mut().take()) {
+        return Ok(b);
+    }
     let mut b = vec![];
     std::io::stdin().take(1_048_577).read_to_end(&mut b)?;
-    Ok(parse(&b)?)
+    Ok(b)
+}
+fn input<T: serde::de::DeserializeOwned + Serialize>() -> Result<T> {
+    Ok(parse(&input_bytes()?)?)
+}
+/// Run one command in this process, with `value` as its input. Role commands
+/// on an owner home that names role services go to those services instead.
+pub(crate) fn call(
+    args: &[String],
+    value: Option<&serde_json::Value>,
+) -> Result<serde_json::Value> {
+    let a = args.iter().map(String::as_str).collect::<Vec<_>>();
+    if let Some(v) = transport::forward(&a, value)? {
+        return Ok(v);
+    }
+    let bytes = match value {
+        Some(v) => serde_json::to_vec(v)?,
+        None => vec![],
+    };
+    INPUT.with(|i| *i.borrow_mut() = Some(bytes));
+    let result = dispatch(&a);
+    INPUT.with(|i| i.borrow_mut().take());
+    result
+}
+/// Path argument helper for `call`.
+pub(crate) fn arg(p: impl AsRef<Path>) -> String {
+    p.as_ref().to_string_lossy().into_owned()
 }
 #[cfg(unix)]
 fn key(path: impl AsRef<Path>) -> Result<SigningKey> {
@@ -114,13 +148,56 @@ const EXPERIMENTAL_USAGE: &str = "";
 fn experimental(_: &[&str]) -> Result<Option<serde_json::Value>> {
     Ok(None)
 }
+mod broker;
+mod http;
+mod mcp;
+mod owner_app;
+mod serve;
+mod transport;
+mod zip;
 fn run() -> Result<serde_json::Value> {
     let a = std::env::args().skip(1).collect::<Vec<_>>();
     let a = a.iter().map(String::as_str).collect::<Vec<_>>();
-    if let Some(v) = experimental(&a)? {
+    // Long-running servers and owner commands that print their own output.
+    match a.as_slice() {
+        ["serve-role", rest @ ..] => {
+            serve::main(rest)?;
+            std::process::exit(0)
+        }
+        ["mcp", home] => {
+            mcp::serve(Path::new(home))?;
+            std::process::exit(0)
+        }
+        ["owner-app", rest @ ..] => {
+            owner_app::main(rest)?;
+            std::process::exit(0)
+        }
+        _ => {}
+    }
+    if let Some(v) = broker::command(&a)? {
         return Ok(v);
     }
-    Ok(match a.as_slice() {
+    let value = if transport::is_remote(&a) {
+        let raw = input_bytes()?;
+        let v: Option<serde_json::Value> = if raw.is_empty() {
+            None
+        } else {
+            Some(serde_json::from_slice(&raw)?)
+        };
+        transport::forward(&a, v.as_ref())?
+    } else {
+        None
+    };
+    if let Some(v) = value {
+        return Ok(v);
+    }
+    dispatch(&a)
+}
+fn dispatch(a: &[&str]) -> Result<serde_json::Value> {
+    if let Some(v) = experimental(a)? {
+        return Ok(v);
+    }
+    Ok(match a {
         ["init", state] => {
             init(Path::new(state))?;
             serde_json::json!({"initialized":true})

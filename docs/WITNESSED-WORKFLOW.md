@@ -55,7 +55,7 @@ outputs/local-venv/bin/python scripts/witness_demo.py --out outputs/new-witness-
 Configure a local MCP client to launch this stdio server with an owner-selected home:
 
 ```sh
-outputs/local-venv/bin/python scripts/witness_mcp.py --home /absolute/path/to/outputs/document-service
+target/debug/openproof-witness mcp /absolute/path/to/outputs/document-service
 ```
 
 The adapter implements initialization, ping, tools/list and tools/call for MCP protocol `2025-11-25`. JSON-RPC messages use newline-delimited JSON and are capped at 32 KiB; notifications cannot trigger actions. The supported tools are `document_propose` and `document_commit`. There is no approval tool. Requests with key/path overrides or extra arguments are rejected. This is a small local integration, not a general MCP authorization proxy or full conformance certification. See [MCP transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports) and [tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).

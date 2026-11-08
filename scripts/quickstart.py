@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One-command local demo setup. No Docker or external model account required."""
 
-import argparse, os, shutil, subprocess, sys, uuid, webbrowser
+import argparse, os, shutil, subprocess, sys, uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,7 +13,7 @@ def main():
     p.add_argument(
         "--check",
         action="store_true",
-        help="Build and run the lab, then exit instead of starting the owner app",
+        help="Build only, then exit instead of starting the owner app",
     )
     a = p.parse_args()
     if sys.version_info < (3, 11):
@@ -60,30 +60,28 @@ def main():
         ),
     )
     out = ROOT / "outputs" / ("welcome-" + uuid.uuid4().hex[:12])
-    run([python, ROOT / "scripts/assurance_lab.py", "--out", out, "--go-binary", go])
-    print("Recorded experiment explorer: " + str(out / "lab.html"), flush=True)
+    if a.check:
+        print("Built the binary and the Go verifier in " + str(tools), flush=True)
+        return
+    cmd = [
+        ROOT / "target/debug/openproof-witness",
+        "owner-app",
+        "--home",
+        out / "owner-workspace",
+        "--demo",
+        "--session-file",
+        out / "owner-session.json",
+    ]
     if not a.no_open:
-        webbrowser.open((out / "lab.html").as_uri())
-    if not a.check:
-        cmd = [
-            python,
-            ROOT / "scripts/owner_app.py",
-            "--home",
-            out / "owner-workspace",
-            "--demo",
-            "--session-file",
-            out / "owner-session.json",
-        ]
-        if not a.no_open:
-            cmd += ["--open"]
-        else:
-            print(
-                "Private session link will be in "
-                + str(out / "owner-session.json")
-                + "; keep it secret.",
-                flush=True,
-            )
-        run(cmd)
+        cmd += ["--open"]
+    else:
+        print(
+            "Private session link will be in "
+            + str(out / "owner-session.json")
+            + "; keep it secret.",
+            flush=True,
+        )
+    run(cmd)
 
 
 if __name__ == "__main__":

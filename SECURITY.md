@@ -18,4 +18,4 @@ Review openproof-trust and runtime install_trust/execute_trusted for root pinnin
 
 ## v0.5 adapter boundary
 
-New Python host adapter and Docker worker require separate review from the completed v0.4 crates scan. The host broker owns the API key and executor authority. Worker has no host mounts/network and only its actor seed. Treat model output as untrusted plain report bytes; never interpret it as commands or filesystem destinations. See docs/ISOLATED-AGENT.md for actual enforcement, bounded probes, provider metadata limitations and static viewer freshness.
+Historical, for an experiment (kept at the git tag `experiments-2026-11-08`): New Python host adapter and Docker worker require separate review from the completed v0.4 crates scan. The host broker owns the API key and executor authority. Worker has no host mounts/network and only its actor seed. Treat model output as untrusted plain report bytes; never interpret it as commands or filesystem destinations. See docs/ISOLATED-AGENT.md for actual enforcement, bounded probes, provider metadata limitations and static viewer freshness.

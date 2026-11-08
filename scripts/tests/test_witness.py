@@ -7,7 +7,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 from witness_workflow import Broker, initialize, call, timeline
 from witness_client import Client
-from witness_mcp import dispatch
+import subprocess
+from witness_workflow import BINARY
 
 
 class Workflow(unittest.TestCase):
@@ -106,19 +107,29 @@ class Workflow(unittest.TestCase):
         self.assertEqual(self.b.commit(identity)["document_version"], 1)
 
     def test_initialization_required_and_unknown_tool(self):
-        with self.assertRaises(ValueError):
-            dispatch(self.b, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, False)
-        result = dispatch(
-            self.b,
+        lines = [
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {}},
             {
                 "jsonrpc": "2.0",
-                "id": 1,
+                "id": 3,
                 "method": "tools/call",
                 "params": {"name": "authority.sign", "arguments": {}},
             },
-            True,
+        ]
+        r = subprocess.run(
+            [str(BINARY), "mcp", str(self.home)],
+            input="".join(json.dumps(x) + "\n" for x in lines),
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
-        self.assertTrue(result["isError"])
+        out = [json.loads(x) for x in r.stdout.splitlines()]
+        self.assertEqual(out[0]["error"]["message"], "invalid_request")
+        self.assertIn("result", out[1])
+        # An unknown tool is refused with a fixed code; nothing else is reachable.
+        self.assertTrue(out[2]["result"]["isError"])
+        self.assertEqual(out[2]["result"]["content"][0]["text"], "invalid_request")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ From a terminal:
 
 ```sh
 cargo build --workspace --locked
-outputs/local-venv/bin/python scripts/owner_app.py --open
+target/debug/openproof-witness owner-app --home outputs/owner-home --open
 ```
 
 The app listens only on `127.0.0.1`, on an automatically selected port or the one given with `--port`. Its address is `http://localhost:PORT`, because passkeys do not work on IP addresses. Once an owner passkey is set up, the app always uses the registered port ([PASSKEY.md](PASSKEY.md)). It is an owner interface for a trusted local account/browser, not a multi-user or remotely hosted administration service. The first URL establishes a secret session and is removed from browser history by the page. Do not share session URLs or session files. There is no analytics, external font, CDN, external model call, or remote asset dependency.
@@ -44,16 +44,7 @@ For a live check use the actual current Unix time. The final checkpoint must be 
 
 ## Planned local key change
 
-This feature is experimental. It needs a witness binary built with `cargo build --workspace --locked --features openproof-witness/experimental`.
-
-The app can prepare and resume a **same-owner** root/receiver/witness change. Resolve all approved requests first. Preparation catches up the witness/verifier and retains an exact cutover, old/new keys and signed records in a private job directory. Admission is paused before any role state changes. Each local database transition is transactional. The controller reconciles the exact recorded handover after an interruption, publishes files while paused, and resumes admission only after all roles/configurations are complete.
-
-```sh
-outputs/local-venv/bin/python scripts/owner_rotation.py prepare HOME
-outputs/local-venv/bin/python scripts/owner_rotation.py resume HOME
-```
-
-This is not a distributed transaction or compromise recovery. If an unfinished role's original handover expires, automatic resume fails closed and admission stays paused. Preserve the job and all state for operator reconciliation; do not remove the pause marker or substitute a new root. Hardware power-loss durability, arbitrary administrative edits during a handover and recovery after all keys are lost are not established. Never use this same-owner convenience workflow as evidence of independent custody.
+The owner app no longer offers a planned key change. The earlier Python controller is kept at the git tag `experiments-2026-11-08` ([EXPERIMENTS.md](EXPERIMENTS.md)). The Rust handover formats stay behind the `experimental` Cargo feature.
 
 ## Verification records
 
@@ -61,4 +52,4 @@ See `outputs/v0.9/VALIDATION.md` for measured results. Browser fixtures use simu
 
 ## Trust renewal and remote roles
 
-Local development trust lasts one day. Use the existing owner CLI `scripts/witness_workflow.py renew HOME` before resuming after expiry; renewal retains keys and history. A service-backed owner home is provisioned explicitly with `scripts/role_transport.py` and the remote operators' public trust/client TLS material. The owner UI then uses those endpoints while retaining only the authority private key. Remote trust renewal and handover remain coordinated operator tasks; the local rotation button is hidden for these homes.
+Local development trust lasts one day. Run `openproof-witness renew HOME` before resuming after expiry; renewal retains keys and history. With [separate role accounts](LOCAL-ROLES.md), the owner home holds a `service-client.json` and the binary sends every role command to the role services over mTLS; renewal and passkey set-up reach them through the services' opt-in trust update.

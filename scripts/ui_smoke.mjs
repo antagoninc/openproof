@@ -6,14 +6,11 @@ import { spawn } from "node:child_process";
 const out = path.resolve(process.argv[2]);
 fs.mkdirSync(out, { recursive: false, mode: 0o700 });
 const root = path.resolve(import.meta.dirname, "..");
-const python =
-  process.env.OPENPROOF_PYTHON ||
-  path.join(root, "outputs/local-venv/bin/python");
 const appLog = fs.openSync(path.join(out, "app.log"), "w");
 const app = spawn(
-  python,
+  path.join(root, "target/debug/openproof-witness"),
   [
-    path.join(root, "scripts/owner_app.py"),
+    "owner-app",
     "--home",
     path.join(out, "home"),
     "--session-file",

@@ -148,7 +148,6 @@ def passkey_cases(out, go_binary):
         decode_dss_signature,
         encode_dss_signature,
     )
-    from owner_app import Owner
 
     out.mkdir()
     home = out / "home"
@@ -177,15 +176,22 @@ def passkey_cases(out, go_binary):
             signature=b64(signer.sign(signed, ec.ECDSA(hashes.SHA256()))),
         )
 
-    owner = Owner(home)
-    owner.origin = ORIGIN
-    identity = owner.broker.propose("report", 1, "Approved with the passkey.")[
-        "proposal_id"
-    ]
-    challenge = owner.approve(identity, owner.review(identity)["review_token"])
-    owner.approve_passkey(
-        identity,
-        challenge["assertion_token"],
+    # The gate directly, as the owner app relays it.
+    from witness_workflow import call
+
+    identity = b.propose("report", 1, "Approved with the passkey.")["proposal_id"]
+    review = b.review(identity)
+    challenge = call(
+        ["gate-approve", home, home / "trust.json", identity, review["review_sha256"]]
+    )
+    call(
+        [
+            "gate-approve-passkey",
+            home,
+            home / "trust.json",
+            identity,
+            challenge["approval_sha256"],
+        ],
         assertion(challenge["approval_sha256"]),
     )
     r = b.commit(identity)

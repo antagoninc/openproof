@@ -9,7 +9,8 @@ or sign a false history with the witness key. After `install`:
 - their keys and state are readable only by that account;
 - the owner app reaches them only through the bounded mTLS role service, so
   every change still passes the receiver's approval checks;
-- the code and interpreter the services run are not writable by the owner.
+- the services run one root-owned copy of the Rust binary, which the owner
+  cannot change; no interpreter or downloaded package is involved.
 
 The owner keeps the approval gate, the authority key and the root key. An
 owner passkey is still needed to make approvals that the owner account alone
@@ -34,32 +35,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 ROLES = ("receiver", "witness")
 VERSION = "openproof-local-roles/1"
 # Files the role service needs, relative to the repository root.
-CODE = [
-    "scripts/role_service.py",
-    "scripts/witness_workflow.py",
-    "scripts/isolation_runner.py",
-    "scripts/certificate_lifecycle.py",
-    "reference/python/openproof_ref.py",
-    "target/debug/openproof-witness",
-]
-CRYPTOGRAPHY = "cryptography==46.0.3"
-# Pinned python-build-standalone interpreter for macOS role services. The
-# hashes match the release's published SHA256SUMS.
-STANDALONE_RELEASE = "20260718"
-STANDALONE = {
-    "arm64": (
-        "cpython-3.12.13+20260718-aarch64-apple-darwin-install_only_stripped.tar.gz",
-        "9a1e9e06175c10efd8378b904b07fa21bd791ab3345d7cdffeb4a76c9ff55903",
-    ),
-    "x86_64": (
-        "cpython-3.12.13+20260718-x86_64-apple-darwin-install_only_stripped.tar.gz",
-        "8e6b7e6533bdf746287008edf91102e7bee0a6ca1d24f16c4514237cafd706c5",
-    ),
-}
-STANDALONE_SOURCES = [
-    "https://github.com/astral-sh/python-build-standalone/releases/download/",
-    "https://releases.astral.sh/github/python-build-standalone/releases/download/",
-]
+# The only code the role services run: one root-owned copy of this binary.
+BINARY = "target/debug/openproof-witness"
 MAC = platform.system() == "Darwin"
 
 
@@ -67,14 +44,11 @@ def defaults():
     if MAC:
         return dict(
             base=Path("/private/var/db/openproof"),
-            # Apple's /usr/bin/python3 uses LibreSSL without TLS 1.3.
-            python="standalone",
             users={"receiver": "_openproofrcv", "witness": "_openproofwit"},
             manager="launchd",
         )
     return dict(
         base=Path("/var/lib/openproof"),
-        python="/usr/bin/python3",
         users={"receiver": "openproof-receiver", "witness": "openproof-witness"},
         manager=(
             "systemd"
@@ -208,15 +182,6 @@ def refuse_writable(paths, uid, why):
                         f"{q} can be changed by the owner account. {why} "
                         "Choose a location owned by root and not writable by the owner."
                     )
-
-
-def interpreter_paths(python):
-    script = (
-        "import json,sys,sysconfig;"
-        "print(json.dumps([sys.executable,sys.base_prefix,"
-        "sysconfig.get_paths()['stdlib'],sysconfig.get_paths()['platstdlib']]))"
-    )
-    return json.loads(run(python, "-E", "-s", "-c", script).stdout)
 
 
 # ---------------------------------------------------------------- TLS
@@ -375,80 +340,30 @@ def chown_tree(path, uid, gid):
             os.chmod(p, 0o700 if p.is_dir() else 0o600)
 
 
-def fetch_standalone(base):
-    """Download the pinned interpreter, check its hash and unpack it as root."""
-    name, digest = STANDALONE[platform.machine()]
-    runtime = base / "runtime"
-    python = runtime / "python/bin/python3"
-    if python.exists():
-        return python
-    archive = base / "runtime.tar.gz"
-    for source in STANDALONE_SOURCES:
-        url = source + STANDALONE_RELEASE + "/" + name.replace("+", "%2B")
-        if run(
-            "curl", "-fsSL", "--proto", "=https", "-o", archive, url, check=False
-        ).returncode:
-            continue
-        if hashlib.sha256(archive.read_bytes()).hexdigest() == digest:
-            break
-    else:
-        archive.unlink(missing_ok=True)
-        raise RuntimeError(
-            "Could not download the pinned Python runtime with the expected hash."
-        )
-    staging = base / "runtime.new"
-    shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(mode=0o755)
-    run("tar", "-xzf", archive, "-C", staging)
-    archive.unlink()
-    for p in [staging, *staging.rglob("*")]:
-        os.lchown(p, 0, 0)
-        if not p.is_symlink():
-            mode = os.lstat(p).st_mode
-            os.chmod(p, 0o755 if p.is_dir() or mode & 0o100 else 0o644)
-    os.replace(staging, runtime)
-    return python
-
-
 def port_free(port):
-    with socket.socket() as s:
-        try:
-            s.bind(("127.0.0.1", port))
-            return True
-        except OSError:
-            return False
+    """No process accepts connections on the port. Connections in TIME_WAIT
+    do not count: the services bind with SO_REUSEADDR."""
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        return False
+    except OSError:
+        return True
 
 
-def install_code(base, python):
+def install_code(base):
     code = base / "libexec"
     if code.exists():
         shutil.rmtree(code)
-    for rel in CODE:
-        src = ROOT / rel
-        if not src.is_file():
-            raise RuntimeError(
-                f"Missing {rel}. Build first with: cargo build --workspace --locked"
-            )
-        dst = code / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
-    run(python, "-E", "-s", "-m", "venv", code / "venv")
-    pip = [
-        code / "venv/bin/python",
-        "-E",
-        "-s",
-        "-m",
-        "pip",
-        "--disable-pip-version-check",
-        "-q",
-    ]
-    run(*pip, "install", "--no-cache-dir", "--upgrade", "pip", check=False)
-    run(*pip, "install", "--no-cache-dir", "--only-binary=:all:", CRYPTOGRAPHY)
-    for p in [code, *code.rglob("*")]:
-        os.lchown(p, 0, 0)
-        if not p.is_symlink():
-            mode = os.lstat(p).st_mode
-            os.chmod(p, 0o755 if p.is_dir() or mode & 0o100 else 0o644)
+    src = ROOT / BINARY
+    if not src.is_file():
+        raise RuntimeError(
+            "Missing " + BINARY + ". Build first with: cargo build --workspace --locked"
+        )
+    code.mkdir(mode=0o755)
+    shutil.copy2(src, code / "openproof-witness")
+    for p in [code, code / "openproof-witness"]:
+        os.chown(p, 0, 0)
+        os.chmod(p, 0o755)
     return code
 
 
@@ -461,10 +376,8 @@ def label(role):
 
 def service_command(code, role_dir, role, port, fingerprint):
     return [
-        str(code / "venv/bin/python"),
-        "-E",
-        "-s",
-        str(code / "scripts/role_service.py"),
+        str(code / "openproof-witness"),
+        "serve-role",
         "--role",
         role,
         "--state",
@@ -673,7 +586,7 @@ def _move_roles(
     return after, expires
 
 
-def install(home, base, python, users, manager, base_port):
+def install(home, base, users, manager, base_port):
     from witness_workflow import home_lock
 
     if os.geteuid() != 0:
@@ -714,16 +627,9 @@ def install(home, base, python, users, manager, base_port):
         refuse_writable(
             [base], owner, "Role keys and code would be in the owner's reach."
         )
-        say("1/7 Get and check the interpreter for the role services")
-        if python == "standalone":
-            python = fetch_standalone(base)
-        refuse_writable(
-            interpreter_paths(python),
-            owner,
-            "The role services would run code the owner can change.",
-        )
-        say("2/7 Install the role code and its Python packages (needs the internet)")
-        code = install_code(base, python)
+        say("1/7 Check that the owner cannot change the role location")
+        say("2/7 Install a root-owned copy of the openproof-witness binary")
+        code = install_code(base)
         refuse_writable(
             [code], owner, "The role services would run code the owner can change."
         )
@@ -897,11 +803,6 @@ def main():
         help="Root-owned folder for role code, keys and state",
     )
     p.add_argument(
-        "--python",
-        default=d["python"],
-        help="Root-owned interpreter for the role services",
-    )
-    p.add_argument(
         "--manager", choices=["launchd", "systemd", "manual"], default=d["manager"]
     )
     p.add_argument("--receiver-account", default=d["users"]["receiver"])
@@ -916,7 +817,7 @@ def main():
     users = {"receiver": a.receiver_account, "witness": a.witness_account}
     try:
         if a.command == "install":
-            result = install(a.home, a.base, a.python, users, a.manager, a.port)
+            result = install(a.home, a.base, users, a.manager, a.port)
         elif a.command == "status":
             result = status(a.home, a.base)
         else:

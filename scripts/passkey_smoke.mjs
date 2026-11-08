@@ -30,9 +30,9 @@ async function freePort() {
 function startApp(name, extra) {
   const log = fs.openSync(path.join(out, name + ".log"), "w");
   return spawn(
-    python,
+    witnessBinary,
     [
-      path.join(root, "scripts/owner_app.py"),
+      "owner-app",
       "--home",
       home,
       "--session-file",
