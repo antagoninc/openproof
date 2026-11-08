@@ -109,12 +109,14 @@ async function refresh() {
         ? "Review change"
         : item.stage === "Approval expired"
           ? "Review again"
-          : item.document_version !== undefined
-            ? "Recover / refresh"
-            : "Execute approved action",
+          : item.stage === "Superseded"
+            ? "Document changed since approval"
+            : item.document_version !== undefined
+              ? "Recover / refresh"
+              : "Execute approved action",
       item.stage === "Awaiting approval" ? "" : "secondary",
     );
-    button.disabled = s.paused;
+    button.disabled = s.paused || item.stage === "Superseded";
     button.onclick = () =>
       action(async () => {
         if (
@@ -148,7 +150,9 @@ async function refresh() {
               ? "Document committed and evidence checked locally. Retrying did not create a second update."
               : r.execution_status === "committed"
                 ? "The document is committed. Evidence needs recovery; retry this same action."
-                : "The action was not confirmed. Retry the same approved action to recover its outcome.",
+                : r.error_code === "admission_failed"
+                  ? "The receiver refused this action. Nothing was changed: the approval is no longer valid for the current document."
+                  : "The action was not confirmed. Retry the same approved action to recover its outcome.",
           );
           await refresh();
         }

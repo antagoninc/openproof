@@ -149,6 +149,13 @@ class Owner:
             status="passkey_installed", installed_epoch=result["installed_epoch"]
         )
 
+    def current_version(self, document):
+        """The receiver's current version of a document, 0 when absent."""
+        try:
+            return call(["document", self.home / "receiver/state", document])["version"]
+        except Exception:
+            return 0
+
     def status(self):
         h = self.home
         items = []
@@ -183,6 +190,12 @@ class Owner:
                                 stage="Committed",
                                 document_version=r["payload"]["document_version"],
                             )
+                        elif (
+                            self.current_version(p["document"]) > p["expected_version"]
+                        ):
+                            # The document moved on after this approval: the
+                            # receiver will refuse it, so do not offer Execute.
+                            item["stage"] = "Superseded"
                         elif time.time() > value["approval"]["payload"]["expires_at"]:
                             item["stage"] = "Approval expired"
                 except Exception:

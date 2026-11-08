@@ -196,6 +196,28 @@ class PasskeyTests(unittest.TestCase):
         _, _, r = self.go_verify()
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_superseded_approval_is_refused_and_marked(self):
+        """Two approvals for the same version: after the first executes, the
+        second is refused without a change and is no longer offered."""
+        self.register()
+        ids = []
+        for content in ["first", "second"]:
+            identity, challenge = self.approve(content=content, version=0)
+            self.o.approve_passkey(
+                identity,
+                challenge["assertion_token"],
+                self.device.assert_(challenge["challenge"]),
+            )
+            ids.append(identity)
+        first = self.o.broker.commit(ids[0])
+        self.assertEqual(first["verification_status"], "local_consistency_verified")
+        second = self.o.broker.commit(ids[1])
+        self.assertEqual(second["execution_status"], "not_committed")
+        self.assertEqual(second["error_code"], "admission_failed")
+        stages = {i["id"]: i["stage"] for i in self.o.status()["items"]}
+        self.assertEqual(stages[ids[1]], "Superseded")
+        self.assertEqual(self.o.current_version("report"), 1)
+
     def test_missing_or_invalid_assertion_cannot_execute(self):
         self.register()
         identity, challenge = self.approve()

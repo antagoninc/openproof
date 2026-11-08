@@ -232,6 +232,12 @@ footer {
   padding: 22px 0;
 }
 #message {
+  /* Stays in view so a result is never shown off screen. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #0b1420;
+  padding: 8px 0;
   font-size: 13px;
   color: #bdd1df;
   min-height: 25px;
