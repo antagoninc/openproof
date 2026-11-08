@@ -61,6 +61,10 @@ def client_data(encoded, kind, challenge, origin):
         raise ValueError("passkey origin rejected")
 
 
+class StaleVersion(ValueError):
+    """A proposal names a document version the receiver has moved past."""
+
+
 class Owner:
     def __init__(self, home):
         self.home = Path(home).resolve()
@@ -146,11 +150,23 @@ class Owner:
         )
 
     def current_version(self, document):
-        """The receiver's current version of a document, 0 when absent."""
+        """The receiver's current version of a document: 0 when absent, None
+        when the receiver cannot answer now."""
         try:
             return call(["document", self.home / "receiver/state", document])["version"]
-        except Exception:
-            return 0
+        except RuntimeError as e:
+            return 0 if "no rows" in str(e) else None
+
+    def propose(self, document, expected_version, content):
+        """Create a proposal from the owner form. Refuse one against a version
+        that has already moved on: it could never execute."""
+        current = self.current_version(document)
+        if current is not None and expected_version != current:
+            raise StaleVersion(
+                f"{document} is at version {current}. Propose against version "
+                f"{current}, or use a new document name."
+            )
+        return self.broker.propose(document, expected_version, content)
 
     def status(self):
         h = self.home
@@ -452,7 +468,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(403, {"error": "Owner session required"})
             if self.path == "/api/propose":
                 ref.fields(v, ["document", "expected_version", "content"])
-                result = o.broker.propose(**v)
+                try:
+                    result = o.propose(**v)
+                except StaleVersion as e:
+                    return self.reply(409, {"error": str(e)})
+            elif self.path == "/api/current-version":
+                ref.fields(v, ["document"])
+                result = {
+                    "document": v["document"],
+                    "version": o.current_version(v["document"]),
+                }
             elif self.path == "/api/review":
                 ref.fields(v, ["id"])
                 result = o.review(v["id"])

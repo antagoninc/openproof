@@ -50,14 +50,14 @@ experiment. See "Outside the trusted code" below.
 | `crates/openproof-witness/src/clock_recovery.rs` | 241 | ✓ | ✓ | | Signed-time floors and clock repair |
 | `crates/openproof-witness/src/verifier.rs` | 246 | | ✓ | | Rust history and checkpoint verification |
 | `scripts/witness_workflow.py` | 582 | ✓ | | | Broker: relays propose, review and approve to the gate; execution steps; key paths; home lock; passkey trust epoch |
-| `scripts/owner_app.py` | 558 | ✓ | | | Local owner app: session, CSRF, one-use review token, relays approvals and assertions to the gate, passkey registration |
-| `app/app.js`, `app/index.html` | 613 | ✓ | | | What the owner sees is what the owner approves; WebAuthn calls |
+| `scripts/owner_app.py` | 580 | ✓ | | | Local owner app: session, CSRF, one-use review token, stale-version refusal, relays approvals and assertions to the gate, passkey registration |
+| `app/app.js`, `app/index.html` | 632 | ✓ | | | What the owner sees is what the owner approves; WebAuthn calls |
 | `scripts/witness_mcp.py` | 119 | ✓ | | | Agent-facing tools: propose and commit only, never approve |
 | `scripts/paged_workflow.py` | 88 | | ✓ | | Enables paging for the owner home |
 | `reference/go-witness/main.go`, `archive.go`, `passkey.go` | 752 | | | ✓ | Independent Go verifier of exported histories, including owner assertions |
 | `scripts/verify_history.py` | 19 | | | ✓ | Wrapper that runs the independently obtained Go verifier |
 
-Total trusted code: about 3,130 lines of Rust, 1,370 of Python, 610 of
+Total trusted code: about 3,130 lines of Rust, 1,390 of Python, 630 of
 JavaScript/HTML and 750 of Go. The Rust total includes the `p256` and
 `base64` crates as dependencies (not counted here).
 
@@ -105,6 +105,6 @@ story in the README and are excluded from the first human audit scope.
 2. Done. `rotation.rs`, `storage.rs` and their commands are behind the Cargo
    feature `experimental`, off by default.
 3. Keep the trusted total under about 4,000 lines and record it here. Not
-   met: the total is about 5,860 lines. Step 1 added about 590 lines of Rust
+   met: the total is about 5,900 lines. Step 1 added about 590 lines of Rust
    and removed about 45 lines of Python. Next candidates: move passkey
    registration checks out of `owner_app.py` into Rust, and shrink `lib.rs`.

@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from owner_app import Owner, Server
+from owner_app import Owner, Server, StaleVersion
 from witness_workflow import initialize, call, ref
 from paged_workflow import enable
 from portable_history import export_history
@@ -47,6 +47,21 @@ class OwnerAppTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.o.approve(identity, review["review_token"])
         self.assertEqual(call(["head", self.h / "receiver/state"])["count"], 0)
+
+    def test_owner_form_refuses_a_stale_version(self):
+        self.assertEqual(self.o.current_version("report"), 0)
+        identity = self.proposed()
+        review = self.o.review(identity)
+        self.o.approve(identity, review["review_token"])
+        self.o.broker.commit(identity)
+        self.assertEqual(self.o.current_version("report"), 1)
+        # The owner form cannot create a proposal that could never execute.
+        with self.assertRaisesRegex(StaleVersion, "report is at version 1"):
+            self.o.propose("report", 0, "old base")
+        self.assertTrue(self.o.propose("report", 1, "new")["proposal_id"])
+        self.assertTrue(self.o.propose("fresh-doc", 0, "new")["proposal_id"])
+        # When the receiver cannot answer, the form does not guess.
+        self.assertIsNone(self.o.current_version("bad name"))
 
     def test_paged_recovery_and_portable_history(self):
         identity = self.proposed()
@@ -147,6 +162,16 @@ class OwnerAppTests(unittest.TestCase):
                 )[0],
                 200,
             )
+            auth = {
+                "Cookie": "openproof_owner=" + self.o.token,
+                "X-OpenProof-CSRF": self.o.csrf,
+            }
+            code, data = post("current-version", {"document": "report"}, auth)
+            self.assertEqual((code, json.loads(data)["version"]), (200, 0))
+            stale = dict(value, expected_version=3)
+            code, data = post("propose", stale, auth)
+            self.assertEqual(code, 409)
+            self.assertIn("report is at version 0", json.loads(data)["error"])
         finally:
             server.shutdown()
             thread.join()

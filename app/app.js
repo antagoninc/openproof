@@ -178,6 +178,7 @@ async function refresh() {
       : "Passkeys need the localhost address. Open the app at its localhost link.";
   $("passkey-setup").hidden = s.passkey.configured || !s.passkey.available;
   $("passkey-setup").disabled = s.paused;
+  await fillCurrentVersion();
 }
 $("refresh").onclick = () => action(refresh);
 $("paging").onclick = () =>
@@ -186,6 +187,24 @@ $("paging").onclick = () =>
     await refresh();
     say("Incremental evidence enabled.");
   });
+// Fill in the receiver's current version for the named document, so a
+// proposal is never made against a version that has already moved on.
+async function fillCurrentVersion() {
+  const form = $("proposal-form");
+  const name = form.elements.document.value.trim();
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(name)) return;
+  try {
+    const r = await api("current-version", { document: name });
+    if (Number.isSafeInteger(r.version))
+      form.elements.expected_version.value = String(r.version);
+  } catch {
+    /* The server check on submit still applies. */
+  }
+}
+$("proposal-form").elements.document.addEventListener(
+  "change",
+  fillCurrentVersion,
+);
 $("proposal-form").onsubmit = (e) => {
   e.preventDefault();
   action(async () => {
