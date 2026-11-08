@@ -154,7 +154,7 @@ class Owner:
         when the receiver cannot answer now."""
         try:
             return call(["document", self.home / "receiver/state", document])["version"]
-        except RuntimeError as e:
+        except Exception as e:
             return 0 if "no rows" in str(e) else None
 
     def propose(self, document, expected_version, content):

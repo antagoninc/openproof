@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Experimental bounded mTLS role transport. Administrative commands stay offline."""
 
-import argparse, hashlib, hmac, json, ssl, subprocess, tempfile
+import argparse, hashlib, hmac, json, os, ssl, subprocess, tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from witness_workflow import call, ref
+
+
+class NotFound(Exception):
+    """A read for a record this role does not hold."""
 
 
 class RoleServer(HTTPServer):
@@ -24,6 +28,7 @@ class RoleServer(HTTPServer):
         host="127.0.0.1",
         port=0,
         tls_bundle=None,
+        accept_trust_updates=False,
     ):
         if role not in ["receiver", "witness"]:
             raise ValueError("role")
@@ -31,6 +36,8 @@ class RoleServer(HTTPServer):
         self.state = Path(state)
         self.key = Path(key)
         self.trust = Path(trust)
+        self.signed_trust = Path(signed_trust)
+        self.accept_trust_updates = accept_trust_updates
         root = call(["role-status", self.state])["root"]
         if not root:
             raise ValueError("Provision a pinned role root before serving")
@@ -66,7 +73,28 @@ class RoleServer(HTTPServer):
             sock.close()
             raise OSError("TLS configuration or handshake rejected") from None
 
+    def install_trust(self, signed):
+        """Install a root-signed trust epoch. The role state checks the root
+        signature, refuses rollback and refuses to remove or replace a pinned
+        owner passkey. This role also refuses a change of role keys."""
+        if not self.accept_trust_updates:
+            raise ValueError("Trust updates are not accepted by this operator")
+        root = call(["role-status", self.state])["root"]
+        new = call(["trust-payload", root], signed)
+        old = ref.read(self.trust)
+        if new["receiver"] != old["receiver"] or new["witness"] != old["witness"]:
+            raise ValueError("Role key change refused")
+        call(["install-signed", self.state, root], signed)
+        for path, data in [(self.signed_trust, signed), (self.trust, new)]:
+            pending = path.with_name(path.name + ".pending")
+            pending.write_text(json.dumps(data, ensure_ascii=False))
+            os.replace(pending, path)
+        return {"installed_epoch": new["epoch"]}
+
     def dispatch(self, path, value):
+        if path == "/v1/install-trust":
+            ref.fields(value, ["signed"])
+            return self.install_trust(value["signed"])
         if path == "/v1/head":
             ref.fields(value, [])
             return call(["head", self.state])
@@ -76,7 +104,12 @@ class RoleServer(HTTPServer):
         if self.role == "receiver":
             if path == "/v1/document":
                 ref.fields(value, ["document"])
-                return call(["document", self.state, value["document"]])
+                try:
+                    return call(["document", self.state, value["document"]])
+                except RuntimeError as e:
+                    if "no rows" in str(e):
+                        raise NotFound("document not found: no rows") from None
+                    raise
             if path == "/v1/export":
                 ref.fields(value, ["checkpoint"])
                 return call(["export", self.state, self.trust], value["checkpoint"])
@@ -165,6 +198,8 @@ class RoleHandler(BaseHTTPRequestHandler):
             value = ref.load_bytes(self.rfile.read(size))
             result = self.server.dispatch(self.path, value)
             self.reply(200, result)
+        except NotFound as e:
+            self.reply(404, {"error": str(e)})
         except (ValueError, KeyError, TypeError):
             self.reply(400, {"error": "invalid_operation"})
         except Exception:
@@ -190,6 +225,11 @@ def main():
     p.add_argument("--client-fingerprint", action="append")
     p.add_argument("--bind", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8443)
+    p.add_argument(
+        "--accept-trust-updates",
+        action="store_true",
+        help="Install root-signed trust epochs sent by the allowlisted client",
+    )
     a = p.parse_args()
     if a.tls_bundle:
         if any([a.cert, a.tls_key, a.ca, a.client_fingerprint]):
@@ -209,6 +249,7 @@ def main():
         a.bind,
         a.port,
         tls_bundle=a.tls_bundle,
+        accept_trust_updates=a.accept_trust_updates,
     )
     print(
         "Authenticated "

@@ -94,6 +94,65 @@ class TransportTests(unittest.TestCase):
                 for t in threads:
                     t.join()
 
+    def test_trust_updates_are_opt_in_and_keep_role_keys(self):
+        from witness_workflow import ref
+
+        with tempfile.TemporaryDirectory(dir=ROOT / "outputs") as directory:
+            d = Path(directory)
+            h = d / "home"
+            initialize(h)
+            certificates(d)
+            role_dir = d / "receiver"
+            role_dir.mkdir()
+            for name in ["trust.json", "trust-signed.json"]:
+                (role_dir / name).write_bytes((h / name).read_bytes())
+
+            def server(accept):
+                return RoleServer(
+                    "receiver",
+                    h / "receiver/state",
+                    h / "receiver/key.secret",
+                    role_dir / "trust.json",
+                    role_dir / "trust-signed.json",
+                    d / "server.pem",
+                    d / "server.key",
+                    d / "ca.pem",
+                    ["00" * 32],
+                    accept_trust_updates=accept,
+                )
+
+            def signed(change, step):
+                t = ref.read(h / "trust.json")
+                t["epoch"] += step
+                change(t)
+                return call(["sign-trust", h / "root/key.secret", h / "root/signer"], t)
+
+            closed = server(False)
+            try:
+                with self.assertRaisesRegex(ValueError, "not accepted"):
+                    closed.dispatch(
+                        "/v1/install-trust", {"signed": signed(lambda t: None, 1)}
+                    )
+            finally:
+                closed.server_close()
+            s = server(True)
+            try:
+                other = call(["keygen", d / "other.secret"])["public_key"]
+                swap = signed(lambda t: t.update(witness=other), 2)
+                with self.assertRaisesRegex(ValueError, "Role key change"):
+                    s.dispatch("/v1/install-trust", {"signed": swap})
+                good = signed(lambda t: None, 3)
+                epoch = ref.read(role_dir / "trust.json")["epoch"] + 3
+                self.assertEqual(
+                    s.dispatch("/v1/install-trust", {"signed": good}),
+                    {"installed_epoch": epoch},
+                )
+                # The service restarts cleanly from the files it wrote.
+                self.assertEqual(ref.read(role_dir / "trust.json")["epoch"], epoch)
+            finally:
+                s.server_close()
+            server(True).server_close()
+
     def test_broker_routes_only_owner_configured_services(self):
         import shutil
         from owner_app import Owner

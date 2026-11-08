@@ -1,6 +1,6 @@
 """Owner-configured HTTPS role client. No redirects, proxies or caller-selected routes."""
 
-import json, ssl, urllib.request, urllib.parse
+import json, ssl, urllib.error, urllib.request, urllib.parse
 from pathlib import Path
 
 
@@ -38,6 +38,7 @@ def dispatch(home, role, args, value):
         "export-page": "page",
         "export-page-historical": "page-historical",
         "document": "document",
+        "install-signed": "install-trust",
     }
     if operation not in mapping:
         raise RuntimeError(
@@ -49,6 +50,9 @@ def dispatch(home, role, args, value):
         body = {"receipt": value}
     elif operation == "receipt":
         body = {"sequence": int(args[2])}
+    elif operation == "install-signed":
+        # The service uses its own pinned root, never a caller-selected one.
+        body = {"signed": value}
     elif operation == "document":
         body = {"document": args[2]}
     elif operation == "export":
@@ -76,8 +80,13 @@ def dispatch(home, role, args, value):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with opener.open(request, timeout=10) as response:
-        return ref.load_bytes(response.read(ref.MAX + 1))
+    try:
+        with opener.open(request, timeout=10) as response:
+            return ref.load_bytes(response.read(ref.MAX + 1))
+    except urllib.error.HTTPError as e:
+        # Same failure type as a local role command, with the service's reason.
+        reason = e.read(4096).decode("utf-8", errors="replace")
+        raise RuntimeError(f"{role} service {e.code}: {reason}") from None
 
 
 def initialize_client(home, authority_key, root, signed_trust, configuration):

@@ -26,8 +26,8 @@ OpenProof makes three guarantees, each with a stated condition. [docs/TCB.md](do
 
 | | Guarantee | Holds today when |
 |---|---|---|
-| **G1** | A document changes only for the exact content, version and receiver that the owner approved, once, before the approval expires. | A passkey is set up: every approval then needs a fresh Touch ID (or other user-verified) gesture on a key no host process can read ([PASSKEY.md](docs/PASSKEY.md)). Without a passkey, the approval key is a file on the host. |
-| **G2** | Every executed change is in the witness's signed, ordered history. Omission, reordering or a fork is detected against a trusted checkpoint. | The witness is run by a party other than the receiver. Today both run under one account. |
+| **G1** | A document changes only for the exact content, version and receiver that the owner approved, once, before the approval expires. | A passkey is set up: every approval then needs a fresh Touch ID (or other user-verified) gesture on a key no host process can read ([PASSKEY.md](docs/PASSKEY.md)). The receiver runs under its own account, so owner processes cannot change its state directly ([LOCAL-ROLES.md](docs/LOCAL-ROLES.md)). Without a passkey, the approval key is a file on the host. |
+| **G2** | Every executed change is in the witness's signed, ordered history. Omission, reordering or a fork is detected against a trusted checkpoint. | The witness is run by a party other than the receiver. Separate role accounts are a step toward this, not the full condition. |
 | **G3** | Anyone can verify an exported history offline with the separate Go verifier, given the trusted root and a current checkpoint. | The verifier and root are obtained independently of the archive. |
 
 ## The one path

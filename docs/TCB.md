@@ -33,8 +33,8 @@ experiment. See "Outside the trusted code" below.
 
 | ID | Guarantee | Holds today when | Does not hold when |
 |---|---|---|---|
-| G1 | The receiver changes a document only for content, version and receiver that an active authority approved, at most once, before the approval expires. With an owner passkey in the trust, each approval also carries a user-verified passkey assertion over its digest. | The approving key is out of the agent's reach, or an owner passkey is installed ([PASSKEY.md](PASSKEY.md)). | No passkey is installed and a process that runs as the owner's account reads `authority/key.secret`. With a passkey: that process changes the receiver's state directly (roles share one account), or the owner confirms a passkey prompt for content they did not mean to approve. |
-| G2 | Every receipt is in the witness's signed, ordered history. Omission, reordering or a fork is detected against a trusted checkpoint. | The witness key is held by a party other than the receiver. | Today the witness runs under the same account as the receiver. One party can then sign a consistent false history. |
+| G1 | The receiver changes a document only for content, version and receiver that an active authority approved, at most once, before the approval expires. With an owner passkey in the trust, each approval also carries a user-verified passkey assertion over its digest. | An owner passkey is installed ([PASSKEY.md](PASSKEY.md)) and the receiver runs under its own account ([LOCAL-ROLES.md](LOCAL-ROLES.md)). | No passkey is installed and a process that runs as the owner's account reads `authority/key.secret`. With a passkey but without separate role accounts: that process changes the receiver's state directly. In every case: the owner confirms a passkey prompt for content they did not mean to approve, or someone with the administrator password changes the role accounts. |
+| G2 | Every receipt is in the witness's signed, ordered history. Omission, reordering or a fork is detected against a trusted checkpoint. | The witness key is held by a party other than the receiver. | The witness runs on the owner's computer. Separate role accounts keep the witness key from the owner account, but the root key is still in the owner home and one administrator controls both accounts. |
 | G3 | A third party can verify an exported history offline, without Antagon code other than the Go verifier, given the trusted root and a current checkpoint. | The verifier binary and root are obtained independently of the archive. | The verifier or root comes from the same archive it checks. |
 
 ## Trusted code by guarantee
@@ -56,6 +56,15 @@ experiment. See "Outside the trusted code" below.
 | `scripts/paged_workflow.py` | 88 | | ✓ | | Enables paging for the owner home |
 | `reference/go-witness/main.go`, `archive.go`, `passkey.go` | 752 | | | ✓ | Independent Go verifier of exported histories, including owner assertions |
 | `scripts/verify_history.py` | 19 | | | ✓ | Wrapper that runs the independently obtained Go verifier |
+
+Trusted only when separate role accounts are installed ([LOCAL-ROLES.md](LOCAL-ROLES.md)):
+
+| File | Lines | G1 | G2 | G3 | Role |
+|---|---:|:-:|:-:|:-:|---|
+| `scripts/local_roles.py` | 841 | ✓ | ✓ | | Accounts, root-owned code and runtime, writability checks, key and state move, TLS, daemons, uninstall |
+| `scripts/role_service.py` | 251 | ✓ | ✓ | | Bounded mTLS role service; opt-in trust-epoch install that refuses role-key changes |
+| `scripts/role_transport.py` | 136 | ✓ | ✓ | | Owner-side mTLS client with fixed operations |
+| `scripts/certificate_lifecycle.py` | 259 | ✓ | ✓ | | Server TLS context checks (imported by the role service) |
 
 Total trusted code: about 3,130 lines of Rust, 1,390 of Python, 630 of
 JavaScript/HTML and 750 of Go. The Rust total includes the `p256` and
@@ -88,7 +97,7 @@ story in the README and are excluded from the first human audit scope.
 |---|---|---|
 | Planned key handover (six-party) | `crates/openproof-witness/src/rotation.rs`, `crates/openproof-witness/src/cli_experimental.rs`, `scripts/owner_rotation.py`, `scripts/prepare_rotation.py` | Experimental; Cargo feature `experimental`, not in the default build |
 | Storage pilot (S3 conditional create) | `crates/openproof-witness/src/storage.rs`, `crates/openproof-witness/src/cli_experimental.rs`, `scripts/storage_adapter.py`, `scripts/storage_demo.py` | Experimental; Cargo feature `experimental`, not in the default build |
-| Remote role services (mTLS) | `scripts/role_service.py`, `scripts/role_transport.py`, `scripts/certificate_lifecycle.py`, `deployment/` | Experimental; becomes trusted when a witness runs remotely |
+| Remote role services (mTLS) | `scripts/role_service.py`, `scripts/role_transport.py`, `scripts/certificate_lifecycle.py`, `deployment/` | Experimental; trusted when separate role accounts are installed (listed above) or a witness runs remotely |
 | Archive retention | `scripts/archive_store.py` | Experimental |
 | Isolated report agent | `isolation/`, `scripts/isolated_agent.py`, `scripts/isolation_runner.py`, `scripts/claude_report.py` | Experimental demonstration |
 | Comparisons and labs | `scripts/compare_*.py`, `scripts/assurance_lab.py`, `scripts/operations_benchmark.py` | Measurement only |
@@ -105,6 +114,7 @@ story in the README and are excluded from the first human audit scope.
 2. Done. `rotation.rs`, `storage.rs` and their commands are behind the Cargo
    feature `experimental`, off by default.
 3. Keep the trusted total under about 4,000 lines and record it here. Not
-   met: the total is about 5,900 lines. Step 1 added about 590 lines of Rust
+   met: the total is about 5,900 lines, and about 7,390 with separate role
+   accounts installed. Step 1 added about 590 lines of Rust
    and removed about 45 lines of Python. Next candidates: move passkey
    registration checks out of `owner_app.py` into Rust, and shrink `lib.rs`.
