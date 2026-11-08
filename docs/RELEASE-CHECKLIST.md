@@ -1,6 +1,6 @@
 # Controlled public preview checklist
 
-**This is a gate checklist, not authorization to publish.** The repository is private. No public release, package publication or deployment is performed by the validation workflow.
+**This is a gate checklist for a versioned release.** Making the source repository public is a separate owner decision. No versioned release, package publication or deployment is performed by the validation workflow.
 
 ## Technical evidence
 
@@ -16,7 +16,7 @@
 
 - [ ] Deliver the exact private snapshot to a selected human reviewer through an approved channel; record scope/exclusions, findings and independent retest.
 - [ ] Complete separate-host operator acceptance and record separate control; Docker alone does not satisfy this gate.
-- [ ] Confirm naming/IP, dependency licensing, security contact and disclosure procedure.
+- [ ] Confirm naming, dependency licensing, security contact and disclosure procedure. (Licensing of the source under Apache-2.0 was cleared by counsel on 8 Nov 2026.)
 - [ ] Review all distributable files for secrets and confidential document content; exclude runtime outputs, test homes, private keys, sessions and databases. Do not upload whole validation directories.
 - [ ] Release notes clearly state experimental scope, trusted actors, known limitations and what was actually tested.
 

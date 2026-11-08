@@ -1,8 +1,8 @@
 # License, provenance, and proprietary boundaries
 
-This is a newly authored standalone project. Its Rust protocol, schema, CLI, documentation, and synthetic tests were created for this request. No existing Antagon project directories, repositories, credentials, models, datasets, customer material, or evaluation systems were imported or used. No TRACE source or specification was copied. Conceptual inspiration does not imply implementation compatibility or affiliation.
+OpenProof is a standalone Antagon project. Its Rust protocol, schema, CLI, documentation and synthetic tests are original to this repository. No other Antagon repositories, credentials, models, datasets, customer material or evaluation systems were imported. No TRACE source or specification was copied. Conceptual inspiration does not imply implementation compatibility or affiliation.
 
-The proposed open-source license is Apache License 2.0 (`LICENSE`). Copyright remains with the applicable rights holders. This notice does not settle ownership of generated contributions or grant rights the contributor does not hold. The license covers eligible files in this new project only. It does not cover or relicense any separate proprietary Antagon material, names, logos, trademarks, models, datasets, services, or patents beyond the express license terms.
+Antagon, Inc. licenses OpenProof under the Apache License 2.0 (`LICENSE`). The licence covers the files in this repository only. It does not cover or relicense any separate proprietary Antagon material, names, logos, trademarks, models, datasets or services.
 
 Dependency source remains under each dependency's license. `Cargo.lock` records exact versions. Before distribution, produce a transitive dependency/license inventory and preserve all required notices. The root license is not a blanket license for dependencies. No legal clearance, exhaustive IP review, trademark clearance, or security audit has been performed.
 
@@ -10,7 +10,7 @@ Allowed here: original protocol code, public cryptographic libraries, synthetic 
 
 Test keys with fixed seeds are public test material only. Generated CLI-test keys are disposable, not Antagon credentials. Demo outputs disclose no private signing seeds. Keep `outputs/`, `target/`, and `*.secret` out of commits. The initial private GitHub import is scanned with Gitleaks. Exact public fixture-key values have narrowly scoped exceptions in .gitleaks.toml; all default detector rules remain enabled. A passing scan is not proof that no secret exists.
 
-No remote or public release is configured. Both packages disable Cargo publication. These settings are guardrails, not authorization to publish elsewhere. Explicit owner approval is still required before any GitHub upload, repository publication, or public release.
+The source is published on GitHub. The crates disable Cargo publication: no crate is published to crates.io, and no versioned release is made until the human-review gate in [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) is met.
 
 ## v0.5 adapter dependencies
 
