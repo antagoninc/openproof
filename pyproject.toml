@@ -1,0 +1,4 @@
+# Formatting only. OpenProof is not a Python package.
+[tool.black]
+line-length = 88
+target-version = ["py311"]

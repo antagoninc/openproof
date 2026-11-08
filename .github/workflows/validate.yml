@@ -45,7 +45,7 @@ jobs:
         run: |
           rustup toolchain install 1.92.0 --profile minimal --component rustfmt --component clippy
           rustup override set 1.92.0
-          python -m pip install -r scripts/requirements.txt jsonschema==4.25.1
+          python -m pip install -r scripts/requirements.txt jsonschema==4.25.1 black==26.10.1
           cargo install cargo-audit --version 0.22.2 --locked
       - name: Validate and create local provenance
         run: python scripts/validate.py --out outputs/ci-validation
