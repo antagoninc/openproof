@@ -53,6 +53,14 @@
           separately trusted public information.
         </p>
       </section>
+      <section class="panel" id="passkey">
+        <span class="eyebrow">OWNER PASSKEY</span>
+        <h2>Approve with your passkey</h2>
+        <p id="passkey-status" class="muted">Checking passkey status…</p>
+        <button id="passkey-setup" class="secondary" hidden>
+          Set up passkey
+        </button>
+      </section>
       <section class="metrics">
         <article>
           <span>Awaiting your review</span><strong id="pending">—</strong>
@@ -161,7 +169,12 @@
       <p id="review-target"></p>
       <pre id="review-content"></pre>
       <p class="muted">Content SHA-256</p>
-      <code id="review-digest"></code
+      <code id="review-digest"></code>
+      <p class="muted" id="passkey-note" hidden>
+        Passkey challenge (approval SHA-256). Confirm with your passkey only if
+        the content above is what you want.
+      </p>
+      <code id="review-approval" hidden></code
       ><label class="check"
         ><input type="checkbox" id="confirm" />I reviewed this exact content and
         document version.</label

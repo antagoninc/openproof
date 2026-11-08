@@ -32,6 +32,43 @@ async function action(fn) {
     busy = false;
   }
 }
+function fromBase64url(text) {
+  const s = text.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(s + "===".slice((s.length + 3) % 4));
+  return Uint8Array.from(binary, (c) => c.charCodeAt(0));
+}
+function toBase64url(buffer) {
+  let binary = "";
+  for (const b of new Uint8Array(buffer)) binary += String.fromCharCode(b);
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+async function passkeyAssertion(challenge) {
+  const publicKey = {
+    challenge: fromBase64url(challenge.challenge),
+    rpId: challenge.rp_id,
+    userVerification: "required",
+    timeout: 120000,
+  };
+  if (challenge.credential_id)
+    publicKey.allowCredentials = [
+      { type: "public-key", id: fromBase64url(challenge.credential_id) },
+    ];
+  const credential = await navigator.credentials.get({ publicKey });
+  const response = credential.response;
+  return {
+    authenticator_data: toBase64url(response.authenticatorData),
+    client_data_json: toBase64url(response.clientDataJSON),
+    signature: toBase64url(response.signature),
+  };
+}
+function showPasskeyChallenge(digest) {
+  $("review-approval").textContent = digest;
+  $("review-approval").hidden = !digest;
+  $("passkey-note").hidden = !digest;
+}
 function element(tag, text, cls) {
   const e = document.createElement(tag);
   e.textContent = text;
@@ -97,6 +134,7 @@ async function refresh() {
             (review.proposal.expected_version + 1);
           $("review-content").textContent = review.proposal.content;
           $("review-digest").textContent = review.content_sha256;
+          showPasskeyChallenge("");
           $("confirm").checked = false;
           $("approve").disabled = true;
           $("review").showModal();
@@ -127,6 +165,15 @@ async function refresh() {
   $("resume").hidden = !s.paused || !s.rotation_resumable;
   $("rotate").hidden = s.paused || s.remote_services;
   $("export").disabled = s.paused;
+  $("passkey-status").textContent = s.passkey.configured
+    ? "Passkey approvals are on for " +
+      s.passkey.origin +
+      ". Every approval needs a fresh, user-verified passkey gesture. Keep using this exact address."
+    : s.passkey.available
+      ? "Approvals are signed with a key file on this computer. Set up a passkey so that every approval also needs your fingerprint, face or device PIN."
+      : "Passkeys need the localhost address. Open the app at its localhost link.";
+  $("passkey-setup").hidden = s.passkey.configured || !s.passkey.available;
+  $("passkey-setup").disabled = s.paused;
 }
 $("refresh").onclick = () => action(refresh);
 $("paging").onclick = () =>
@@ -164,9 +211,77 @@ $("approve").onclick = () =>
     if (!review || !$("confirm").checked) return;
     const r = review;
     review = null;
-    $("review").close();
-    await api("approve", { id: r.id, review_token: r.review_token });
-    say("Exact change approved. Choose “Execute approved action” when ready.");
+    $("approve").disabled = true;
+    try {
+      const result = await api("approve", {
+        id: r.id,
+        review_token: r.review_token,
+      });
+      if (result.status === "passkey_required") {
+        // The dialog keeps showing the exact content while the passkey prompt is open.
+        showPasskeyChallenge(result.approval_sha256);
+        say("Confirm with your passkey to approve this exact change.");
+        let assertion;
+        try {
+          assertion = await passkeyAssertion(result);
+        } catch {
+          throw Error(
+            "Passkey approval was not completed. Nothing was approved. Review the change again.",
+          );
+        }
+        await api("approve/passkey", {
+          id: r.id,
+          assertion_token: result.assertion_token,
+          assertion,
+        });
+      }
+      say(
+        "Exact change approved. Choose “Execute approved action” when ready.",
+      );
+    } finally {
+      $("review").close();
+      showPasskeyChallenge("");
+      await refresh();
+    }
+  });
+$("passkey-setup").onclick = () =>
+  action(async () => {
+    if (!window.PublicKeyCredential)
+      throw Error("This browser does not support passkeys.");
+    const begin = await api("passkey/register/begin", {});
+    const credential = await navigator.credentials.create({
+      publicKey: {
+        rp: { id: begin.rp_id, name: "OpenProof" },
+        user: {
+          id: fromBase64url(begin.user_id),
+          name: begin.user_name,
+          displayName: "OpenProof owner",
+        },
+        challenge: fromBase64url(begin.challenge),
+        pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+        authenticatorSelection: {
+          userVerification: "required",
+          residentKey: "preferred",
+        },
+        attestation: "none",
+        timeout: 120000,
+      },
+    });
+    const response = credential.response;
+    if (response.getPublicKeyAlgorithm() !== -7)
+      throw Error("The passkey must use ES256 (P-256).");
+    const result = await api("passkey/register/finish", {
+      credential_id: toBase64url(credential.rawId),
+      client_data_json: toBase64url(response.clientDataJSON),
+      authenticator_data: toBase64url(response.getAuthenticatorData()),
+      public_key: toBase64url(response.getPublicKey()),
+      algorithm: -7,
+    });
+    say(
+      "Passkey set up (trust epoch " +
+        result.installed_epoch +
+        "). Every approval now needs your passkey.",
+    );
     await refresh();
   });
 action(async () => {

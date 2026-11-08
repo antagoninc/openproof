@@ -53,7 +53,16 @@ def run(name, cmd, cwd=ROOT, env=None):
 run("format", ["cargo", "fmt", "--all", "--", "--check"])
 run(
     "python-format",
-    [sys.executable, "-m", "black", "--check", "--quiet", "scripts", "reference/python", "isolation"],
+    [
+        sys.executable,
+        "-m",
+        "black",
+        "--check",
+        "--quiet",
+        "scripts",
+        "reference/python",
+        "isolation",
+    ],
 )
 run(
     "clippy",

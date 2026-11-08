@@ -213,7 +213,12 @@ func signed(v any, k any, domain string) map[string]any {
 }
 func trust(v any, now uint64) map[string]any {
 	t := obj(v)
-	fields(t, "version", "epoch", "expires_at", "authority", "receiver", "witness", "previous_authorities", "revoked_authorities")
+	if k, ok := t["owner_passkey"]; ok {
+		fields(t, "version", "epoch", "expires_at", "authority", "receiver", "witness", "previous_authorities", "revoked_authorities", "owner_passkey")
+		ownerPasskey(k)
+	} else {
+		fields(t, "version", "epoch", "expires_at", "authority", "receiver", "witness", "previous_authorities", "revoked_authorities")
+	}
 	need(str(t["version"]) == version && num(t["epoch"]) > 0 && num(t["epoch"]) <= uint64(1<<63-1) && now <= num(t["expires_at"]))
 	a, r, w := str(t["authority"]), str(t["receiver"]), str(t["witness"])
 	key(a)
@@ -277,8 +282,7 @@ func verify(tv, pinv, pv any, now uint64) map[string]any {
 	need(len(rs) > 0 && len(rs) <= 4096 && len(qs) <= 4096)
 	requests := map[string]map[string]any{}
 	for _, v := range qs {
-		q := obj(v)
-		fields(q, "approval", "content")
+		q := request(v)
 		aenv := obj(q["approval"])
 		fields(aenv, "payload", "signature")
 		a := approval(aenv["payload"])
@@ -317,6 +321,7 @@ func verify(tv, pinv, pv any, now uint64) map[string]any {
 			issuer := str(a["authority"])
 			need((issuer == str(t["authority"]) || contains(t["previous_authorities"], issuer)) && !contains(t["revoked_authorities"], issuer))
 			signed(q["approval"], issuer, "document-approval/1")
+			ownerAssertion(q, t, digest("document-approval/1", a), num(r["sequence"]))
 			need(str(a["receiver"]) == str(t["receiver"]) && num(a["not_before"]) <= at && at <= num(a["expires_at"]))
 			content := str(q["content"])
 			need(len(content) > 0 && len(content) <= 8192 && hash(content) == str(a["content_sha256"]))

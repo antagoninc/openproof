@@ -189,6 +189,8 @@ class Broker:
             raise RuntimeError("approval declined")
         with home_lock(self.home):
             require_admission(self.home)
+            if "owner_passkey" in ref.read(self.home / "trust.json"):
+                raise RuntimeError("owner passkey required; approve in the owner app")
             if len(list((self.home / "approved").glob("*.json"))) >= 1000:
                 raise RuntimeError("approved request capacity; owner archival required")
             q = call(
@@ -417,6 +419,9 @@ def _install_trust(home, configuration):
         raise ValueError(
             "receiver/witness key rotation requires a future migration protocol"
         )
+    # The receiver, witness and verifier states refuse this too; fail before signing.
+    if "owner_passkey" in old and new.get("owner_passkey") != old["owner_passkey"]:
+        raise ValueError("an installed owner passkey cannot be removed or replaced")
     signed = call(["sign-trust", home / "root/key.secret", home / "root/signer"], new)
     root = ref.read(home / "root-public.json")["public_key"]
     for role in ["receiver", "witness"]:
@@ -437,6 +442,29 @@ def renew(home):
         trust = authenticated_trust(home)
         trust["epoch"] += 1
         trust["expires_at"] = int(time.time()) + 86400
+        path = home / ("trust-update-" + uuid.uuid4().hex + ".json")
+        save(path, trust)
+        return _install_trust(home, path)
+
+
+def enroll_passkey(home, passkey):
+    """Issue a new root-signed trust epoch that requires the owner's passkey."""
+    home = Path(home).resolve()
+    with home_lock(home):
+        require_admission(home)
+        trust = authenticated_trust(home)
+        if "owner_passkey" in trust:
+            raise ValueError("an owner passkey is already installed")
+        # History up to the current receiver head was approved without a passkey.
+        head = call(["head", home / "receiver/state"])["count"]
+        trust["epoch"] += 1
+        trust["expires_at"] = int(time.time()) + 86400
+        trust["owner_passkey"] = dict(
+            public_key=passkey["public_key"],
+            rp_id=passkey["rp_id"],
+            origin=passkey["origin"],
+            from_sequence=head + 1,
+        )
         path = home / ("trust-update-" + uuid.uuid4().hex + ".json")
         save(path, trust)
         return _install_trust(home, path)

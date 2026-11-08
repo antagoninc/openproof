@@ -36,8 +36,7 @@ func pageStep(t map[string]any, pinv, pv any, now uint64, c *chain) bool {
 	need(compact.Len()-1 <= 512*1024)
 	requests := map[string]map[string]any{}
 	for _, v := range qs {
-		q := obj(v)
-		fields(q, "approval", "content")
+		q := request(v)
 		aenv := obj(q["approval"])
 		fields(aenv, "payload", "signature")
 		a := approval(aenv["payload"])
@@ -78,6 +77,7 @@ func pageStep(t map[string]any, pinv, pv any, now uint64, c *chain) bool {
 			c.Issuers[issuer] = true
 			need((issuer == str(t["authority"]) || contains(t["previous_authorities"], issuer)) && !contains(t["revoked_authorities"], issuer))
 			signed(q["approval"], issuer, "document-approval/1")
+			ownerAssertion(q, t, digest("document-approval/1", a), num(r["sequence"]))
 			need(str(a["receiver"]) == str(t["receiver"]) && num(a["not_before"]) <= at && at <= num(a["expires_at"]))
 			content := str(q["content"])
 			need(len(content) > 0 && len(content) <= 8192 && hash(content) == str(a["content_sha256"]))
@@ -123,6 +123,7 @@ func rotationStep(hv, oldv any, root string, confirmed any, c *chain) (string, m
 	old := rootTrust(oldv, root, at)
 	nt := trust(r["new_trust"], at)
 	need(num(nt["epoch"]) > num(old["epoch"]))
+	samePasskey(old, nt)
 	sum := sha256.Sum256(canonical(old))
 	need(str(r["old_trust_sha256"]) == hex.EncodeToString(sum[:]))
 	nr := str(r["new_root"])
@@ -181,6 +182,7 @@ func verifyArchive(root string, pin any, directory string, now uint64) map[strin
 				if num(t["epoch"]) == num(current["epoch"]) {
 					need(bytes.Equal(canonical(t), canonical(current)))
 				}
+				samePasskey(current, t)
 			}
 			for issuer := range c.Issuers {
 				need((issuer == str(t["authority"]) || contains(t["previous_authorities"], issuer)) && !contains(t["revoked_authorities"], issuer))

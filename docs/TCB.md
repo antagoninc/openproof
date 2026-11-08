@@ -29,7 +29,7 @@ experiment. See "Outside the trusted code" below.
 
 | ID | Guarantee | Holds today when | Does not hold when |
 |---|---|---|---|
-| G1 | The receiver changes a document only for content, version and receiver that an active authority approved, at most once, before the approval expires. | The approving key is out of the agent's reach. | A process that runs as the owner's account can read `authority/key.secret` and sign approvals. Passkey approvals ([PASSKEY.md](PASSKEY.md)) close this gap. |
+| G1 | The receiver changes a document only for content, version and receiver that an active authority approved, at most once, before the approval expires. With an owner passkey in the trust, each approval also carries a user-verified passkey assertion over its digest. | The approving key is out of the agent's reach, or an owner passkey is installed ([PASSKEY.md](PASSKEY.md)). | No passkey is installed and a process that runs as the owner's account reads `authority/key.secret`. With a passkey: that process changes the receiver's state directly (roles share one account), or the owner confirms a passkey prompt for content they did not mean to approve. |
 | G2 | Every receipt is in the witness's signed, ordered history. Omission, reordering or a fork is detected against a trusted checkpoint. | The witness key is held by a party other than the receiver. | Today the witness runs under the same account as the receiver. One party can then sign a consistent false history. |
 | G3 | A third party can verify an exported history offline, without Antagon code other than the Go verifier, given the trusted root and a current checkpoint. | The verifier binary and root are obtained independently of the archive. | The verifier or root comes from the same archive it checks. |
 
@@ -38,21 +38,23 @@ experiment. See "Outside the trusted code" below.
 | File | Lines | G1 | G2 | G3 | Role |
 |---|---:|:-:|:-:|:-:|---|
 | `crates/openproof-core/src/lib.rs` | 320 | ✓ | ✓ | | Canonical bytes (OPEC-1), domain-separated Ed25519 signatures, strict parsing |
-| `crates/openproof-witness/src/lib.rs` | 777 | ✓ | ✓ | | Trust configuration, approvals, receiver admission and replay state, receipts, witness checkpoints |
-| `crates/openproof-witness/src/main.rs` | 398 | ✓ | ✓ | | Command dispatcher; private-key file reads; approval signing |
-| `crates/openproof-witness/src/pages.rs` | 289 | | ✓ | | Bounded history pages (enabled by the owner app) |
+| `crates/openproof-witness/src/lib.rs` | 791 | ✓ | ✓ | | Trust configuration, approvals, receiver admission and replay state, receipts, witness checkpoints |
+| `crates/openproof-witness/src/passkey.rs` | 254 | ✓ | | | Owner passkey: trust field validation, WebAuthn assertion check, passkey pin (tests excluded from the count) |
+| `crates/openproof-witness/src/main.rs` | 452 | ✓ | ✓ | | Command dispatcher; private-key file reads; approval signing; assertion pre-check |
+| `crates/openproof-witness/src/pages.rs` | 290 | | ✓ | | Bounded history pages (enabled by the owner app) |
 | `crates/openproof-witness/src/clock_recovery.rs` | 241 | ✓ | ✓ | | Signed-time floors and clock repair |
 | `crates/openproof-witness/src/verifier.rs` | 246 | | ✓ | | Rust history and checkpoint verification |
-| `scripts/witness_workflow.py` | 570 | ✓ | | | Broker: proposal, approval and execution steps; key paths; home lock |
-| `scripts/owner_app.py` | 381 | ✓ | | | Local owner app: session, CSRF, exact review token, approval route |
-| `app/app.js`, `app/index.html` | 481 | ✓ | | | What the owner sees is what the owner approves |
+| `scripts/witness_workflow.py` | 596 | ✓ | | | Broker: proposal, approval and execution steps; key paths; home lock; passkey trust epoch |
+| `scripts/owner_app.py` | 577 | ✓ | | | Local owner app: session, CSRF, exact review token, approval route, passkey registration and assertion |
+| `app/app.js`, `app/index.html` | 609 | ✓ | | | What the owner sees is what the owner approves; WebAuthn calls |
 | `scripts/witness_mcp.py` | 119 | ✓ | | | Agent-facing tools: propose and commit only, never approve |
 | `scripts/paged_workflow.py` | 88 | | ✓ | | Enables paging for the owner home |
-| `reference/go-witness/main.go`, `archive.go` | 578 | | | ✓ | Independent Go verifier of exported histories |
+| `reference/go-witness/main.go`, `archive.go`, `passkey.go` | 752 | | | ✓ | Independent Go verifier of exported histories, including owner assertions |
 | `scripts/verify_history.py` | 19 | | | ✓ | Wrapper that runs the independently obtained Go verifier |
 
-Total trusted code: about 2,300 lines of Rust, 1,160 of Python, 480 of
-JavaScript/HTML and 580 of Go.
+Total trusted code: about 2,600 lines of Rust, 1,400 of Python, 610 of
+JavaScript/HTML and 750 of Go. The Rust total now includes the `p256` and
+`base64` crates as dependencies (not counted here).
 
 ## Outside the trusted code
 

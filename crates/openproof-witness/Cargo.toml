@@ -16,3 +16,5 @@ rand_core.workspace = true
 rusqlite.workspace = true
 zeroize.workspace = true
 libc.workspace = true
+p256.workspace = true
+base64.workspace = true

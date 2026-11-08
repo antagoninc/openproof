@@ -20,6 +20,8 @@ mod pages;
 pub use pages::*;
 mod verifier;
 pub use verifier::*;
+mod passkey;
+pub use passkey::*;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub const V: &str = "openproof-witness/1";
 pub const ZERO: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -61,6 +63,10 @@ pub struct Trust {
     pub revoked_authorities: Vec<String>,
     pub receiver: String,
     pub witness: String,
+    /// Absent in every trust made before passkey approvals, so their canonical
+    /// bytes and signatures are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_passkey: Option<OwnerPasskey>,
 }
 impl Trust {
     pub fn validate(&self, time: u64) -> Result<()> {
@@ -92,6 +98,9 @@ impl Trust {
         }
         for k in [&self.authority, &self.receiver, &self.witness] {
             openproof_core::public_key(k)?;
+        }
+        if let Some(k) = &self.owner_passkey {
+            k.validate()?;
         }
         check(
             self.authority != self.receiver
@@ -137,6 +146,8 @@ impl Evidence for Approval {
 pub struct Request {
     pub approval: Signed<Approval>,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_assertion: Option<PasskeyAssertion>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -270,6 +281,7 @@ pub fn assess(
                 .get(&x.approval_sha256)
                 .ok_or("missing authorization")?;
             validate_request(q, t, x.observed_at)?;
+            check_owner_assertion(q, t, x.sequence)?;
             check(
                 used.insert(q.approval.payload.nonce.clone()),
                 "duplicate authorization nonce",
@@ -421,6 +433,7 @@ fn pin(tx: &rusqlite::Transaction<'_>, t: &Trust, time: u64) -> Result<()> {
             "trust rollback, equivocation or clock rollback",
         )?;
     }
+    passkey::pin_owner_passkey(tx, t)?;
     tx.execute("INSERT INTO control VALUES(1,?1,?2,?3) ON CONFLICT(id) DO UPDATE SET epoch=excluded.epoch,trust_hash=excluded.trust_hash,clock=excluded.clock",params![t.epoch,h,time])?;
     Ok(())
 }
@@ -503,6 +516,7 @@ fn apply_inner<F: FnOnce() -> Result<()>>(
         .unwrap_or(0);
     check(ver == a.expected_version, "document version conflict")?;
     let (seq, head) = tip(&tx)?;
+    admit_owner_assertion(q, t, seq + 1)?;
     let receipt = sign(
         Receipt {
             version: V.into(),

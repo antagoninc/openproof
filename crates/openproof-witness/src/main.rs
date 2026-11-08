@@ -65,6 +65,7 @@ const USAGE: &str = concat!(
     "  init DIR\n",
     "  approve KEY TRUST < PROPOSAL\n",
     "  receive DIR KEY TRUST < REQUEST\n",
+    "  check-assertion TRUST < REQUEST\n",
     "  witness DIR KEY TRUST < RECEIPT\n",
     "  recover DIR < REQUEST\n",
     "  receipt DIR SEQUENCE\n",
@@ -185,6 +186,7 @@ fn run() -> Result<serde_json::Value> {
             serde_json::to_value(Request {
                 approval: sign(a, &k)?,
                 content: p.content,
+                owner_assertion: None,
             })?
         }
         ["receive", state, secret, configuration] => serde_json::to_value(apply(
@@ -207,6 +209,13 @@ fn run() -> Result<serde_json::Value> {
             &key(secret)?,
             now(),
         )?)?,
+        ["check-assertion", configuration] => {
+            let t = trust(configuration)?;
+            t.validate(now())?;
+            let q: Request = input()?;
+            check_request_assertion(&q, &t)?;
+            serde_json::json!({"owner_assertion_verified":true,"approval_sha256":openproof_core::digest(&q.approval.payload)?})
+        }
         ["recover", state] => serde_json::to_value(recover(Path::new(state), &input()?)?)?,
         ["receipt", state, sequence] => {
             serde_json::to_value(stored_receipt(Path::new(state), sequence.parse()?)?)?

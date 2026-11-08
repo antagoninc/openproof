@@ -243,6 +243,36 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 8192
+        },
+        "owner_assertion": {
+          "description": "Optional WebAuthn assertion over the approval digest (docs/PASSKEY.md). Base64url without padding.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authenticator_data",
+            "client_data_json",
+            "signature"
+          ],
+          "properties": {
+            "authenticator_data": {
+              "description": "At most 1024 bytes decoded",
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "maxLength": 1366
+            },
+            "client_data_json": {
+              "description": "At most 2048 bytes decoded",
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "maxLength": 2731
+            },
+            "signature": {
+              "description": "DER ECDSA P-256 signature, at most 80 bytes decoded",
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "maxLength": 107
+            }
+          }
         }
       },
       "required": [

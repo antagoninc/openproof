@@ -64,6 +64,41 @@
           },
           "maxItems": 64,
           "uniqueItems": true
+        },
+        "owner_passkey": {
+          "description": "Optional owner passkey (docs/PASSKEY.md). Absent in trusts made before passkey approvals. Once present it must stay identical in later epochs.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "public_key",
+            "rp_id",
+            "origin",
+            "from_sequence"
+          ],
+          "properties": {
+            "public_key": {
+              "description": "Lowercase hex SEC1 uncompressed P-256 point (65 bytes)",
+              "type": "string",
+              "pattern": "^04[0-9a-f]{128}$"
+            },
+            "rp_id": {
+              "description": "WebAuthn relying party ID: localhost or a lowercase DNS name",
+              "type": "string",
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$",
+              "maxLength": 253
+            },
+            "origin": {
+              "description": "Exact origin: http://localhost:PORT or https://HOST[:PORT]",
+              "type": "string",
+              "pattern": "^(http://localhost:[1-9][0-9]{0,4}|https://[a-z0-9.-]{1,253}(:[1-9][0-9]{0,4})?)$"
+            },
+            "from_sequence": {
+              "description": "First receipt sequence whose request must carry an owner assertion",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9223372036854775807
+            }
+          }
         }
       }
     },

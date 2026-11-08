@@ -11,7 +11,7 @@ cargo build --workspace --locked
 outputs/local-venv/bin/python scripts/owner_app.py --open
 ```
 
-The app listens only on `127.0.0.1`, on an automatically selected port. It is an owner interface for a trusted local account/browser, not a multi-user or remotely hosted administration service. The first URL establishes a secret session and is removed from browser history by the page. Do not share session URLs or session files. There is no analytics, external font, CDN, external model call, or remote asset dependency.
+The app listens only on `127.0.0.1`, on an automatically selected port or the one given with `--port`. Its address is `http://localhost:PORT`, because passkeys do not work on IP addresses. Once an owner passkey is set up, the app always uses the registered port ([PASSKEY.md](PASSKEY.md)). It is an owner interface for a trusted local account/browser, not a multi-user or remotely hosted administration service. The first URL establishes a secret session and is removed from browser history by the page. Do not share session URLs or session files. There is no analytics, external font, CDN, external model call, or remote asset dependency.
 
 ## Daily flow
 

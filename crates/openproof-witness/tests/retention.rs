@@ -62,6 +62,7 @@ fn six_weeks_of_renewals_replay_and_restored_backup_reconciliation() {
         witness: pk(&wk),
         previous_authorities: vec![],
         revoked_authorities: vec![],
+        owner_passkey: None,
     };
     let mut count = 0;
     let mut last = None;
@@ -97,6 +98,7 @@ fn six_weeks_of_renewals_replay_and_restored_backup_reconciliation() {
                 )
                 .unwrap(),
                 content,
+                owner_assertion: None,
             };
             let receipt = apply(&receiver, &request, &t, &rk, at).unwrap();
             assert_eq!(

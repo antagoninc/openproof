@@ -20,3 +20,5 @@ proptest = "=1.11.0"
 
 zeroize = "1"
 libc = "0.2"
+p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "std"] }
+base64 = "0.22.1"

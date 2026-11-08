@@ -187,6 +187,7 @@ pub fn verify_page(
                 .remove(&x.approval_sha256)
                 .ok_or("page authorization missing")?;
             validate_request(q, &t.payload, x.observed_at)?;
+            check_owner_assertion(q, &t.payload, x.sequence)?;
             let a = &q.approval.payload;
             check(
                 x.document == a.document

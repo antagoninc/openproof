@@ -37,6 +37,7 @@ fn setup() -> Setup {
         revoked_authorities: vec![],
         receiver: hex::encode(r.verifying_key().to_bytes()),
         witness: hex::encode(w.verifying_key().to_bytes()),
+        owner_passkey: None,
     };
     Setup { dir: d, t, a, r, w }
 }
@@ -59,6 +60,7 @@ fn request(s: &Setup, nonce: u8, version: u64) -> Request {
         )
         .unwrap(),
         content,
+        owner_assertion: None,
     }
 }
 fn receive(s: &Setup, q: &Request) -> Signed<Receipt> {

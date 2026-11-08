@@ -91,7 +91,11 @@ class OwnerAppTests(unittest.TestCase):
 
             def post(path, body, headers=None):
                 c = http.client.HTTPConnection("127.0.0.1", server.server_port)
-                h = {"Origin": self.o.origin, "Content-Type": "application/json"}
+                h = {
+                    "Host": self.o.origin.removeprefix("http://"),
+                    "Origin": self.o.origin,
+                    "Content-Type": "application/json",
+                }
                 h.update(headers or {})
                 c.request("POST", "/api/" + path, json.dumps(body), h)
                 r = c.getresponse()

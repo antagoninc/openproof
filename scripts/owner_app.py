@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local owner UI. Loopback only, explicit session, exact review binding, no arbitrary tools."""
 
-import argparse, hashlib, hmac, http.cookies, json, secrets, sys, time, threading, webbrowser, uuid, zipfile, re
+import argparse, base64, errno, hashlib, hmac, http.cookies, json, os, secrets, sys, time, threading, webbrowser, uuid, zipfile, re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from witness_workflow import (
@@ -13,8 +13,56 @@ from witness_workflow import (
     ref,
     home_lock,
     require_admission,
+    enroll_passkey,
 )
-from paged_workflow import enable
+from paged_workflow import enable, replace_json
+
+RP_ID = "localhost"
+FLAG_USER_PRESENT = 0x01
+FLAG_USER_VERIFIED = 0x04
+
+
+def b64encode(raw):
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def b64decode(text, limit):
+    """Strict base64url without padding, as browsers produce it."""
+    if not isinstance(text, str) or not re.fullmatch("[A-Za-z0-9_-]+", text):
+        raise ValueError("base64url required")
+    raw = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+    if b64encode(raw) != text or not 0 < len(raw) <= limit:
+        raise ValueError("noncanonical or oversized base64url")
+    return raw
+
+
+def approval_digest(request):
+    payload = request["approval"]["payload"]
+    preimage = b"OpenProof/v1/document-approval/1\0" + ref.canonical(payload)
+    return hashlib.sha256(preimage).hexdigest()
+
+
+def sec1_point(spki):
+    """SPKI DER from getPublicKey() to lowercase hex SEC1 uncompressed P-256."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    key = serialization.load_der_public_key(spki)
+    if not isinstance(key, ec.EllipticCurvePublicKey) or key.curve.name != "secp256r1":
+        raise ValueError("passkey must be ECDSA P-256")
+    raw = key.public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
+    )
+    return raw.hex()
+
+
+def client_data(encoded, kind, challenge, origin):
+    data = ref.load_bytes(b64decode(encoded, 2048))
+    ref.fields(data, ["type", "challenge", "origin"], set(data))
+    if data["type"] != kind or data["challenge"] != challenge:
+        raise ValueError("passkey challenge rejected")
+    if data["origin"] != origin or data.get("crossOrigin", False) is not False:
+        raise ValueError("passkey origin rejected")
 
 
 class Owner:
@@ -24,7 +72,82 @@ class Owner:
         self.token = secrets.token_hex(32)
         self.csrf = secrets.token_hex(32)
         self.reviews = {}
+        self.registration = None
+        self.assertions = {}
         self.origin = ""
+
+    def passkey(self):
+        """Owner passkey from the installed trust, plus the stored credential id."""
+        configured = ref.read(self.home / "trust.json").get("owner_passkey")
+        credential = None
+        if configured and (self.home / "passkey.json").exists():
+            stored = ref.read(self.home / "passkey.json")
+            if stored.get("public_key") == configured["public_key"]:
+                credential = stored.get("credential_id")
+        return configured, credential
+
+    def passkey_status(self):
+        configured, _ = self.passkey()
+        return dict(
+            configured=bool(configured),
+            origin=configured["origin"] if configured else self.origin,
+            available=self.origin.startswith("http://" + RP_ID + ":"),
+        )
+
+    def register_begin(self):
+        with home_lock(self.home):
+            require_admission(self.home)
+        if self.passkey()[0]:
+            raise ValueError("An owner passkey is already set up")
+        if not self.origin.startswith("http://" + RP_ID + ":"):
+            raise ValueError("Passkeys need the localhost origin")
+        challenge = secrets.token_bytes(32)
+        self.registration = dict(challenge=b64encode(challenge), time=time.monotonic())
+        return dict(
+            challenge=self.registration["challenge"],
+            rp_id=RP_ID,
+            user_id=b64encode(secrets.token_bytes(16)),
+            user_name="owner",
+        )
+
+    def register_finish(self, v):
+        ref.fields(
+            v,
+            [
+                "credential_id",
+                "client_data_json",
+                "authenticator_data",
+                "public_key",
+                "algorithm",
+            ],
+        )
+        pending = self.registration
+        self.registration = None
+        if not pending or time.monotonic() - pending["time"] > 300:
+            raise ValueError("Passkey setup expired; start again")
+        if v["algorithm"] != -7:
+            raise ValueError("Passkey must use ES256")
+        client_data(
+            v["client_data_json"], "webauthn.create", pending["challenge"], self.origin
+        )
+        auth = b64decode(v["authenticator_data"], 1024)
+        flags = FLAG_USER_PRESENT | FLAG_USER_VERIFIED
+        if len(auth) < 37 or auth[:32] != hashlib.sha256(RP_ID.encode()).digest():
+            raise ValueError("Passkey relying party rejected")
+        if auth[32] & flags != flags:
+            raise ValueError("Passkey user verification required")
+        b64decode(v["credential_id"], 1023)
+        point = sec1_point(b64decode(v["public_key"], 1024))
+        result = enroll_passkey(
+            self.home, dict(public_key=point, rp_id=RP_ID, origin=self.origin)
+        )
+        replace_json(
+            self.home / "passkey.json",
+            dict(credential_id=v["credential_id"], public_key=point),
+        )
+        return dict(
+            status="passkey_installed", installed_epoch=result["installed_epoch"]
+        )
 
     def status(self):
         h = self.home
@@ -97,6 +220,7 @@ class Owner:
             remote_services=(h / "service-client.json").exists(),
             paging=(h / "paging.json").exists(),
             paused=(h / "rotation-pending.json").exists(),
+            passkey=self.passkey_status(),
             scope="Local receiver database; one host owner. Saved assessments are observations, not a fresh independent audit.",
         )
 
@@ -161,6 +285,60 @@ class Owner:
                 ],
                 p,
             )
+            configured, credential = self.passkey()
+            if not configured:
+                save(self.broker.file("approved", identity), q)
+                self.broker.file("proposals", identity).unlink(missing_ok=True)
+                return {"status": "approved", "id": identity}
+        # The signed request is held until the owner's passkey signs its digest.
+        self.assertions = {
+            k: v
+            for k, v in self.assertions.items()
+            if time.monotonic() - v["time"] < 300
+        }
+        if len(self.assertions) >= 100:
+            raise ValueError("Too many outstanding passkey approvals")
+        token = secrets.token_hex(32)
+        digest = approval_digest(q)
+        self.assertions[token] = dict(
+            identity=identity,
+            proposal=review["digest"],
+            request=q,
+            digest=digest,
+            time=time.monotonic(),
+        )
+        return dict(
+            status="passkey_required",
+            id=identity,
+            assertion_token=token,
+            approval_sha256=digest,
+            challenge=b64encode(bytes.fromhex(digest)),
+            rp_id=configured["rp_id"],
+            credential_id=credential,
+        )
+
+    def approve_passkey(self, identity, token, assertion):
+        pending = self.assertions.pop(token, None)
+        if (
+            not pending
+            or pending["identity"] != identity
+            or time.monotonic() - pending["time"] > 300
+        ):
+            raise ValueError("Passkey approval expired; review the action again")
+        ref.fields(assertion, ["authenticator_data", "client_data_json", "signature"])
+        if not all(isinstance(x, str) for x in assertion.values()):
+            raise ValueError("Invalid passkey assertion")
+        q = dict(pending["request"], owner_assertion=assertion)
+        with home_lock(self.home):
+            require_admission(self.home)
+            p = ref.read(self.broker.file("proposals", identity))
+            if hashlib.sha256(ref.canonical(p)).hexdigest() != pending["proposal"]:
+                raise ValueError("Proposal changed; review it again")
+            if len(list((self.home / "approved").glob("*.json"))) >= 1000:
+                raise ValueError("Approval storage capacity reached")
+            checked = call(["check-assertion", self.home / "trust.json"], q)
+            if checked["approval_sha256"] != pending["digest"]:
+                raise ValueError("Approval digest mismatch")
             save(self.broker.file("approved", identity), q)
             self.broker.file("proposals", identity).unlink(missing_ok=True)
         return {"status": "approved", "id": identity}
@@ -171,8 +349,9 @@ class Server(HTTPServer):
 
     def __init__(self, owner, port):
         self.owner = owner
+        # Bind loopback only, but advertise localhost: WebAuthn rejects IP addresses.
         super().__init__(("127.0.0.1", port), Handler)
-        owner.origin = "http://127.0.0.1:" + str(self.server_port)
+        owner.origin = "http://" + RP_ID + ":" + str(self.server_port)
 
     def get_request(self):
         sock, address = super().get_request()
@@ -303,6 +482,16 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/approve":
                 ref.fields(v, ["id", "review_token"])
                 result = o.approve(v["id"], v["review_token"])
+            elif self.path == "/api/approve/passkey":
+                ref.fields(v, ["id", "assertion_token", "assertion"])
+                result = o.approve_passkey(
+                    v["id"], v["assertion_token"], v["assertion"]
+                )
+            elif self.path == "/api/passkey/register/begin":
+                ref.fields(v, [])
+                result = o.register_begin()
+            elif self.path == "/api/passkey/register/finish":
+                result = o.register_finish(v)
             elif self.path == "/api/commit":
                 ref.fields(v, ["id"])
                 result = o.broker.commit(v["id"])
@@ -368,6 +557,20 @@ class Handler(BaseHTTPRequestHandler):
             )
 
 
+def bind(owner, port):
+    """Bind loopback. A fixed port can stay in TIME_WAIT briefly after a restart;
+    wait for it instead of setting SO_REUSEADDR."""
+    for attempt in range(120):
+        try:
+            return Server(owner, port)
+        except OSError as e:
+            if port == 0 or e.errno != errno.EADDRINUSE or attempt == 119:
+                raise
+            if attempt == 0:
+                print("Waiting for port " + str(port) + " to be free…", flush=True)
+            time.sleep(1)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--home", default=str(ROOT / "outputs/owner-home"))
@@ -381,16 +584,28 @@ def main():
         initialize(home)
         enable(home)
     owner = Owner(home)
+    configured, _ = owner.passkey()
+    if configured:
+        # The passkey is bound to its exact origin, so the port must not change.
+        registered = int(configured["origin"].rsplit(":", 1)[1])
+        if a.port not in [0, registered]:
+            raise SystemExit(
+                "The owner passkey is registered for "
+                + configured["origin"]
+                + "; use --port "
+                + str(registered)
+            )
+        a.port = registered
     if a.demo and not owner.status()["items"]:
         owner.broker.propose(
             "welcome-report",
             0,
             "Welcome to OpenProof. This public demonstration stores exactly this text in the local receiver database. Review, approve, and execute are separate decisions. No model was called.",
         )
-    server = Server(owner, a.port)
+    server = bind(owner, a.port)
     url = server.owner.origin + "/#" + server.owner.token
     if a.session_file:
-        save(Path(a.session_file), {"url": url, "pid": __import__("os").getpid()})
+        save(Path(a.session_file), {"url": url, "pid": os.getpid()})
     if a.open:
         webbrowser.open(url)
     print(
