@@ -10,7 +10,8 @@ OpenProof connects an exact authorization to a bounded action, a receiver's exec
 
 <p>
   <a href="#quick-start"><strong>Quick start</strong></a> &nbsp;·&nbsp;
-  <a href="#the-owner-workspace">Owner workspace</a> &nbsp;·&nbsp;
+  <a href="#what-openproof-guarantees">Guarantees</a> &nbsp;·&nbsp;
+  <a href="docs/TCB.md">Trusted code</a> &nbsp;·&nbsp;
   <a href="#what-the-evidence-means">Trust boundaries</a> &nbsp;·&nbsp;
   <a href="docs/VALIDATION.md">Validation</a> &nbsp;·&nbsp;
   <a href="docs/ROADMAP.md">Roadmap</a>
@@ -19,24 +20,29 @@ OpenProof connects an exact authorization to a bounded action, a receiver's exec
 > **v0.9.0 · Experimental · No production-security claim**
 > Signatures authenticate statements. They do not prove that a model is truthful, a physical-world effect occurred, or an operator is independent. The current milestone has not received a human security audit.
 
-## The owner workspace
+## What OpenProof guarantees
 
-**Propose → review → approve → execute → recover → export.**
+OpenProof makes three guarantees, each with a stated condition. [docs/TCB.md](docs/TCB.md) lists the code each one depends on.
 
-| Capability | What it does |
-|---|---|
-| **Exact approval** | Binds the reviewed document, version and content; approval and execution are separate decisions |
-| **Execution receipts** | Atomically updates the receiver's document database and records its signed receipt |
-| **Witnessed history** | Tracks ordered receipts, signed checkpoints and explicitly disclosed gaps |
-| **Incremental evidence** | Verifies bounded pages while retaining nonce, version and checkpoint state |
-| **Planned key handover** | Preserves history through a six-party signed transition with stopped admission and recovery |
-| **Portable verification** | Reconstructs signed history offline in a separate Go implementation |
-| **Storage pilot** | Binds report bytes and destination for conditional S3 creation; distinguishes adapter acknowledgment from read-back |
-| **Daily recovery** | Inspects interrupted actions and refreshes existing receipts without dispatching unexecuted work |
-| **Certificate lifecycle** | Warns about expiry and stages explicit TLS renewals/client retirement |
-| **Authenticated services** | Uses mutual TLS and explicit client identities for receiver/witness endpoints |
+| | Guarantee | Holds today when |
+|---|---|---|
+| **G1** | A document changes only for the exact content, version and receiver that the owner approved, once, before the approval expires. | A passkey is set up: every approval then needs a fresh Touch ID (or other user-verified) gesture on a key no host process can read ([PASSKEY.md](docs/PASSKEY.md)). Without a passkey, the approval key is a file on the host. |
+| **G2** | Every executed change is in the witness's signed, ordered history. Omission, reordering or a fork is detected against a trusted checkpoint. | The witness is run by a party other than the receiver. Today both run under one account. |
+| **G3** | Anyone can verify an exported history offline with the separate Go verifier, given the trusted root and a current checkpoint. | The verifier and root are obtained independently of the archive. |
 
-The local browser app provides exact-content review, readable outcomes, retry/recovery and evidence export. It renders model-provided text as text, never as commands or executable HTML. Agent-facing tools can propose and commit approved work; they cannot grant owner approval.
+## The one path
+
+**Propose → review → approve with passkey → execute → witness → verify offline.**
+
+1. An agent **proposes** a document change through the MCP tools. Agent tools can propose and execute approved work. They cannot approve.
+2. The owner **reviews** the exact content and its SHA-256 in the local owner app and **approves** it with a passkey. The passkey signs the approval digest, so the gesture is bound to that exact document, version, content and nonce.
+3. The owner separately **executes**. The receiver checks the approval and the passkey assertion, applies the change atomically and signs a receipt. A retry returns the original receipt without a second change.
+4. The **witness** adds the receipt to its ordered history and signs a checkpoint.
+5. The owner **exports** the history. Anyone **verifies** it offline with the Go verifier.
+
+The owner app renders model-provided text as text, never as commands or executable HTML. Interrupted actions are recovered without dispatching unexecuted work.
+
+Experimental features are outside the guarantees and outside the first audit scope: planned key handover, the S3 storage pilot, remote mTLS role services and certificate lifecycle, archive retention, and the isolated report agent. See [docs/TCB.md](docs/TCB.md#outside-the-trusted-code).
 
 ## Quick start
 
@@ -93,7 +99,7 @@ The Go verifier is separately implemented without calling Rust, but it shares pr
 
 ## Validation
 
-The recorded v0.9 local milestone passed:
+The recorded v0.9 local milestone passed (the current branch adds passkey approvals; its local run on 8 Nov 2026 passed 134 Rust tests, the Go tests, 82 Python tests and both browser workflows on Linux):
 
 | Check | Recorded result |
 |---|---|
@@ -117,20 +123,19 @@ The workflow performs checks and builds only. It does not publish packages, uplo
 
 ## Project map
 
-| Path | Purpose |
-|---|---|
-| `crates/openproof-core` | Original evidence schema, OPEC-1 canonicalization, domain-separated signatures |
-| `crates/openproof-runtime` | Bounded local execution, replay state and recovery |
-| `crates/openproof-trust` | Signed trust, revision floors and planned trust transitions |
-| `crates/openproof-witness` | Document receiver, witness, pages and role handovers |
-| `crates/openproof-cli` | Evidence and execution CLI |
-| `app` / `scripts` | Owner UI, adapters, transport, demonstrations and validation |
-| `reference` | Separate Python and Go verification implementations |
-| `schemas` / `fixtures` / `fuzz` | Versioned formats, public synthetic evidence and fuzz targets |
+| Path | Purpose | In the trusted code |
+|---|---|---|
+| `crates/openproof-core` | OPEC-1 canonical bytes, domain-separated signatures, strict parsing | Yes |
+| `crates/openproof-witness` | Document receiver, witness, passkey check, pages, history verifier | Yes, except `rotation.rs` and `storage.rs` |
+| `reference/go-witness` | Separate Go verifier of exported histories | Yes (G3) |
+| `app`, `scripts/owner_app.py`, `scripts/witness_workflow.py`, `scripts/witness_mcp.py` | Owner app, broker and agent tools | Yes (G1) |
+| `crates/openproof-runtime`, `crates/openproof-trust`, `crates/openproof-cli` | Original v1 action bundles | No; kept for compatibility |
+| other `scripts`, `isolation`, `deployment` | Experiments, demonstrations, validation | No |
+| `schemas` / `fixtures` / `fuzz` | Versioned formats, public synthetic evidence and fuzz targets | Test material |
 
 ## Documentation
 
-[Protocol](docs/PROTOCOL.md) · [Threat model](docs/threatmodel.md) · [Security policy](SECURITY.md) · [Recovery](docs/RECOVERY.md) · [Trust](docs/TRUST.md) · [Operator handoff](docs/handoff/OPERATORS.md) · [Human review brief](docs/handoff/REVIEW-BRIEF.md) · [Roadmap](docs/ROADMAP.md)
+[Trusted code](docs/TCB.md) · [Passkey approvals](docs/PASSKEY.md) · [Protocol](docs/PROTOCOL.md) · [Threat model](docs/threatmodel.md) · [Security policy](SECURITY.md) · [Recovery](docs/RECOVERY.md) · [Trust](docs/TRUST.md) · [Operator handoff](docs/handoff/OPERATORS.md) · [Human review brief](docs/handoff/REVIEW-BRIEF.md) · [Roadmap](docs/ROADMAP.md)
 
 Some historical guides mention `outputs/...` records from the local development workspace. Those paths are not distributed evidence; use the sanitized validation summary for repository-readable results or regenerate fixtures locally.
 
