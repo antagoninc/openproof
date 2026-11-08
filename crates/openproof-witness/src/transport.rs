@@ -40,6 +40,22 @@ pub fn is_remote(a: &[&str]) -> bool {
     target(a).is_some()
 }
 
+/// Role commands that read a JSON value from standard input.
+pub fn takes_input(a: &[&str]) -> bool {
+    matches!(
+        a.first(),
+        Some(
+            &("receive"
+                | "recover"
+                | "witness"
+                | "export"
+                | "export-page"
+                | "export-page-historical"
+                | "install-signed")
+        )
+    )
+}
+
 pub fn provider() -> Arc<rustls::crypto::CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
 }

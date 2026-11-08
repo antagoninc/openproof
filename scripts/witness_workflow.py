@@ -31,6 +31,8 @@ def call(args, value=None):
     r = subprocess.run(
         [str(BINARY), *map(str, args)],
         input=raw,
+        # Never pass a terminal through: a command without input reads nothing.
+        stdin=None if raw is not None else subprocess.DEVNULL,
         capture_output=True,
         env=ENV,
         timeout=20,

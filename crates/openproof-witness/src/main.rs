@@ -178,11 +178,12 @@ fn run() -> Result<serde_json::Value> {
         return Ok(v);
     }
     let value = if transport::is_remote(&a) {
-        let raw = input_bytes()?;
-        let v: Option<serde_json::Value> = if raw.is_empty() {
-            None
+        // Read standard input only for commands that take input: a terminal
+        // left on standard input must never block a read-only command.
+        let v: Option<serde_json::Value> = if transport::takes_input(&a) {
+            Some(serde_json::from_slice(&input_bytes()?)?)
         } else {
-            Some(serde_json::from_slice(&raw)?)
+            None
         };
         transport::forward(&a, v.as_ref())?
     } else {
