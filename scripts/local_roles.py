@@ -658,6 +658,11 @@ def install(home, base, users, manager, base_port):
         except BaseException:
             say("Install failed. Undo the partial install and restore the owner home.")
             for role in ROLES:
+                log = roles_dir[role] / "service.log"
+                if log.exists():
+                    tail = log.read_text(errors="replace").splitlines()[-5:]
+                    say(f"{role} service log: " + " | ".join(tail))
+            for role in ROLES:
                 if (backup / role).exists():
                     if (home / role).exists():
                         (home / role).rmdir()
@@ -752,10 +757,12 @@ def uninstall(home, base):
     record = load_record(base, home)
     owner = pwd.getpwnam(record["owner"])
     with home_lock(home):
-        before = heads(home)
+        # Read the role states directly, not through the services: uninstall
+        # must work even when a service does not answer.
         say("1/4 Stop the role services")
         for role in ROLES:
             stop_service(record["manager"], base, role)
+        before = heads(base)
         say("2/4 Return the role keys and state to the owner home")
         for role in ROLES:
             d = base / role
