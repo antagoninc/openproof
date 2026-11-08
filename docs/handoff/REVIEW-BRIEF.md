@@ -4,7 +4,7 @@ Status: ready for private reviewer selection. No external review has been commis
 
 ## Engagement target
 
-Review the exact source archive and its SHA-256 manifest. Report its digest with every finding. Original Rust execution-assurance prototype, version 0.9.0, with new signed document approvals, transactional receiver receipts and separate witness checkpoints. The proposed independent-operator pilot is described in OPERATORS.md. Network service deployment is not implemented.
+Review the exact source archive and its SHA-256 manifest. Report its digest with every finding. Original Rust execution-assurance prototype, version 0.9.0, with new signed document approvals, transactional receiver receipts and separate witness checkpoints. The proposed independent-operator pilot is described in OPERATORS.md. Experimental mTLS role services are implemented and tested locally; independent deployment has not occurred.
 
 Primary scope: `crates/openproof-witness`, its use of `openproof-core`, `scripts/witness_workflow.py`, `scripts/witness_mcp.py`, `scripts/witness_client.py`, trust lifecycle, parsing, private key handling, SQLite state, crash behavior and verifier assumptions. Review other workspace crates where they cross these boundaries. Review existing tests skeptically rather than treating passing tests as security proof.
 
@@ -40,8 +40,16 @@ Reviewer access is limited to the approved snapshot. Do not probe external infra
 
 ## v0.8 review additions
 
-Include pages.rs, rotation.rs, the Go witness verifier, Docker build/pilot, page driver, owner dashboard and signed-build evidence. Review cross-page nonce/version/issuer state, pending-prefix resets, mixed trust epochs, six-signature equality, partial three-role handover, rollback/backup assumptions and historical packaging. The Go reference covers only stateless v1 full packages. The current broker does not automate paged/rotated homes. Verify the Docker runtime image excludes build-stage test state, private mounts are distinct, and shared host control is clearly disclosed. No AI review or local tests satisfy this human-review gate.
+Include pages.rs, rotation.rs, the Go witness verifier, Docker build/pilot, page driver, owner dashboard and signed-build evidence. Review cross-page nonce/version/issuer state, pending-prefix resets, mixed trust epochs, six-signature equality, partial three-role handover, rollback/backup assumptions and historical packaging. The v0.8 reference initially covered stateless v1 packages; v0.9 added Go cross-epoch archive verification and integrated paged/rotated local homes. Verify the Docker runtime image excludes build-stage test state, private mounts are distinct, and shared host control is clearly disclosed. No AI review or local tests satisfy this human-review gate.
 
 ## v0.9 review additions
 
 Review the local HTTP owner session, exact review tokens, CSP/text rendering, archived evidence exports, paged broker controller, interrupted key publication, Go cross-epoch archive reconstruction, historical versus current checkpoint times, mTLS fingerprint authorization and bounded operations. Review expired partial handover behavior and trusted-local-account assumptions. Test the normal browser flow and boundary failures, not only direct library calls. New local signed build evidence v2 also binds the Go artifact and supports v1 verification. A human review has not been commissioned; reviewer identity, budget, recipient/transfer authorization and independently administered hosts are still external prerequisites.
+
+## Private preview review additions
+
+Review `history_viewer.py`, `verify_history.py`, `assurance_lab.py`, `quickstart.py` and `package_external_review.py`. Distinguish inert unverified record display from a real Go verification result. Test hostile markup, path traversal, stale/future checkpoints, archive-local verifier substitution and accidental use of bundled trust. The recorded report is mutable and cannot become an attestation by being rendered in HTML. Demo approvals are simulated; the owner workspace requires separate review and execution.
+
+Exercise process death after receiver commit followed by concurrent retries, monotonic review expiry despite wall-clock changes, and the expanded stateful fuzz operations. Review source-only packaging, exact source digest checks and the systemd template against the eventual host configuration. Template preparation is not evidence of deployment. Request fresh certificate lifecycle, host-abuse and recovery tests from the real operators.
+
+The reviewer package now requires `--validation COMPLETED_VALIDATION_DIRECTORY` and rejects modified source or missing required checks. Its deterministic archive contains source and a bounded validation summary, not private runtime logs or state. Record the SHA256SUMS digest in the engagement and in every finding. Local build signature keys are development-only and must not become release trust anchors.

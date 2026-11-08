@@ -57,3 +57,9 @@ Separate Go full-package verifier, bounded durable pages, six-party planned witn
 Implemented: session-protected local owner app; exact-content approval and retry; paged broker evidence; retained/resumable same-owner handover jobs; public-only archive export; Go archive verification across pages and rotations; experimental mTLS role endpoints; browser workflow, interruption/storage/corruption tests and a bounded stateful fuzz target. New local build evidence v2 additionally binds the Go executable and retains v1 verification support.
 
 Open: independent host deployment/operators, fresh human review, sustained stateful fuzzing, expired partial handover reconciliation, physical power-loss testing, safe live-state pruning/migration, certificate lifecycle and independent-machine build reproduction. Local repeat-build comparison is not independent reproduction.
+
+## Private preview improvements
+
+One-command first-run setup, eight real synthetic tamper/retry experiments with an interactive recorded-results explorer, script-free archive viewer, separate offline verification report, crash-after-commit/concurrent-retry regression coverage, expanded stateful fuzz operations, reproducible validated-source reviewer packaging, current separate-host handoff, compatibility policy and controlled release checklist.
+
+These are local implementation work, not evidence of external deployment or review. Independent hosts/operators, human review, independent build reproduction and explicit public publication approval remain open. See the current validation report for measured outcomes; do not infer those gates from passing CI.

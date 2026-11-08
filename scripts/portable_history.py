@@ -32,6 +32,8 @@ def export_history(home,out):
         save(out/'manifest.json',{'version':'openproof-portable-history/1','entries':entries})
         # This copy is convenient evidence, not a substitute for a separately trusted pin.
         save(out/'checkpoint-copy.json',cp)
+        from history_viewer import render
+        render(out)
         return {'archive':str(out),'entries':len(entries),'count':cp['payload']['count'],'trust_root_included':False,'checkpoint_requires_independent_provisioning':True}
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('home');p.add_argument('--out',required=True);a=p.parse_args();print(json.dumps(export_history(a.home,a.out),indent=2))

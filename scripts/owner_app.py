@@ -134,10 +134,13 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:self.reply(409,{'error':'Operation interrupted. Retry the same approved action to recover its outcome; do not create a replacement approval.'})
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--home',default=str(ROOT/'outputs/owner-home'));p.add_argument('--port',type=int,default=0);p.add_argument('--open',action='store_true');p.add_argument('--session-file');a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--home',default=str(ROOT/'outputs/owner-home'));p.add_argument('--port',type=int,default=0);p.add_argument('--open',action='store_true');p.add_argument('--session-file');p.add_argument('--demo',action='store_true');a=p.parse_args()
     home=Path(a.home).resolve()
     if not home.exists():initialize(home);enable(home)
-    server=Server(Owner(home),a.port);url=server.owner.origin+'/#'+server.owner.token
+    owner=Owner(home)
+    if a.demo and not owner.status()['items']:
+        owner.broker.propose('welcome-report',0,'Welcome to OpenProof. This public demonstration stores exactly this text in the local receiver database. Review, approve, and execute are separate decisions. No model was called.')
+    server=Server(owner,a.port);url=server.owner.origin+'/#'+server.owner.token
     if a.session_file:save(Path(a.session_file),{'url':url,'pid':__import__('os').getpid()})
     if a.open:webbrowser.open(url)
     print('OpenProof owner app is running at '+server.owner.origin+' (use --open to establish your owner session).',flush=True)

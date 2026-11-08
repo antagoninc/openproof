@@ -43,13 +43,10 @@ Use macOS or Linux with Rust/Cargo, Python 3.11 and Go installed. The repeatable
 git clone https://github.com/antagoninc/openproof.git
 cd openproof
 
-mkdir -p outputs
-python3 -m venv outputs/local-venv
-outputs/local-venv/bin/python -m pip install -r scripts/requirements.txt jsonschema==4.25.1
-cargo build --workspace --locked
-
-outputs/local-venv/bin/python scripts/owner_app.py --open
+python3 scripts/quickstart.py
 ```
+
+The first-run command installs the pinned Python dependencies in a project-local environment, builds Rust and Go, runs eight synthetic assurance experiments, opens their interactive results, and starts a fresh owner workspace with an unapproved sample. No Docker or model account is needed. Use `--check --no-open` for a noninteractive check.
 
 On macOS, after setup, double-click **[Open OpenProof.command](Open%20OpenProof.command)**. The app uses a private local home under `outputs/owner-home` and listens only on loopback. Keep the terminal open while using it; Control-C stops the app. No external model call is made by startup or fixture demonstrations.
 
@@ -62,6 +59,20 @@ outputs/local-venv/bin/python scripts/witness_demo.py --out outputs/my-demo
 Choose a new output directory for each demonstration. These examples simulate approval of public test content; they are not evidence of human approval of a real action.
 
 **[Owner guide →](docs/OWNER-APP.md)** · [Agent/MCP workflow](docs/WITNESSED-WORKFLOW.md) · [Authenticated services](docs/AUTHENTICATED-SERVICES.md)
+
+## Explore and verify
+
+The first-run experiment explorer shows altered content, substituted signers, duplicate receipts and omitted history rejected by real checks. An identical approved retry recovers the original receipt without another update. These are simulated approvals, not human consent.
+
+Evidence exports include a readable, script-free `viewer.html` and `VERIFY.txt`. The viewer is explicitly **unverified display**. Use your independently obtained Go verifier and separately trusted genesis root and current checkpoint to generate a fresh offline result:
+
+```sh
+outputs/local-venv/bin/python scripts/verify_history.py EXTRACTED_ARCHIVE \
+  --root TRUSTED_GENESIS_ROOT_HEX --checkpoint SEPARATELY_TRUSTED_CHECKPOINT.json \
+  --go-binary outputs/tooling/openproof-go-verify --out outputs/my-offline-check
+```
+
+[Compatibility policy](docs/COMPATIBILITY.md) · [Controlled preview checklist](docs/RELEASE-CHECKLIST.md)
 
 ## What the evidence means
 
@@ -90,7 +101,7 @@ The recorded v0.9 local milestone passed:
 | Bounded fuzz campaigns | **4,390,141 executions**; the new stateful target covered only **78 sequences** |
 | Repeat Linux build | Identical witness executable bytes on the same host and pinned image |
 
-These are recorded local results, not a claim that a hosted run passed. The [sanitized validation summary](docs/VALIDATION.md) explains scope and limitations. Generated logs, private keys, databases, browser sessions and runtime homes are deliberately excluded from Git.
+The initial private import also passed [Linux and macOS hosted validation](https://github.com/antagoninc/openproof/actions/runs/42453339807). That run covers its recorded commit; later changes require fresh validation. The [sanitized validation summary](docs/VALIDATION.md) explains scope and limitations. Generated logs, private keys, databases, browser sessions and runtime homes are deliberately excluded from Git.
 
 To run the complete validation, install `cargo-audit` and use a fresh directory:
 

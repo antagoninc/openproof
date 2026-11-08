@@ -1,71 +1,43 @@
-# Independent operator pilot
+# Independent operator handoff
 
-For current signed trust distribution, persistent verifier setup, authenticated export, staging and clock recovery, follow [REVIEW-HARDENING.md](../REVIEW-HARDENING.md). The older plain-trust manual flow below is a low-level synthetic exercise, not the recommended acceptance path.
+**Prepared locally. No independent hosts, operators or human reviewer enrolled.** Containers on one host remain controlled by that host administrator. Neither this package nor successful local mTLS tests establish organizational independence.
 
-Status: prepared for private handoff; no external host or operator enrolled.
+## Assign responsibility first
 
-## Ownership before deployment
+Copy `deployment/operator-record.example.json` into your private operational records. Receiver and witness need separately administered Linux hosts, separate role keys, separate TLS credentials and incident contacts. Record the reviewed source archive digest and actual identities. The authority signs approvals; the root custodian signs trust. Keep both keys off receiver and witness hosts. Agree on authenticated public-key and checkpoint exchange channels. Do not fill unknown fields with demo identities or claim acceptance while records are incomplete.
 
-Assign an owner authority, a receiver operator, a witness operator, and a verifier. Record each organization's identity, host administrator, incident contact, public-key fingerprint, and authenticated exchange channel. The witness must have separate administrative control and credentials from the receiver. Separate processes, accounts on one administrator's host, or AI agents controlled by one owner do not establish independent operation.
+## Build and provision
 
-Each operator builds the reviewed source with `cargo build --release --locked --workspace` on its own Unix host. Linux execution must be tested before acceptance; the existing v0.7 results were obtained on macOS. Do not distribute local demonstration keys or databases. Generate new role keys on their destination hosts. Keep the authority key off the receiver and witness.
+1. Each operator obtains the same reviewed source archive and verifies SHA256SUMS through the agreed channel. Build `cargo build --workspace --locked` on each host. The current Python adapter expects `target/debug/openproof-witness` relative to the source tree; retain that path. Install Python dependencies in a private environment; do not copy the development environment or state.
+2. Generate the role signing key on its destination host using `openproof-witness keygen`. Initialize its private state with `init`. Exchange only public keys. Verify fingerprints through the agreed channel. Pin the root with `role-pin`, then `install-signed` the root-signed trust. Enable paging on the receiver before use. See [authenticated services](../AUTHENTICATED-SERVICES.md) and `openproof-witness` usage for the exact supported commands; do not use the older unsigned trust pilot.
+3. Provision operator-managed TLS certificates with the correct server DNS names/IP SANs, TLS private keys, the client CA and an explicit client certificate fingerprint allowlist. Test missing, unlisted, wrong-host and expired certificates. CA membership alone must not authorize a client. Decide expiry monitoring, renewal overlap and restart procedure before pilot acceptance; automated certificate lifecycle is not implemented.
+4. Install source read-only under `/opt/openproof`, a Python environment at `/opt/openproof/venv`, private role state at `/var/lib/openproof/state`, and role/TLS configuration under `/etc/openproof`. The `openproof` service user needs read access to its role key and TLS key, and write access only to its state. Never provision root/authority keys to this account.
+5. Review `deployment/systemd/openproof-role.service`. It is a template, not an installed or remotely tested service. Provide owner-controlled `/etc/openproof/role.env` with `ROLE=receiver` (or `witness`), `BIND_ADDRESS` set to the chosen private interface, and one exact `CLIENT_FINGERPRINT`. Multiple clients require explicit repeated arguments in the unit. Restrict port 8443 to the selected clients at the host/network firewall. Keep the owner UI loopback-only.
+6. Before enabling supervision, run the service manually on the actual host. Confirm the root-pinned state and signed/plain trust agree. Run `systemd-analyze verify` on the final unit on that host. Then enable it using the operator's change procedure. Do not expose an admin endpoint or remote shell wrapper.
+7. Provision the owner client using `scripts/role_transport.py --help`. It receives only authority credentials, public trust and TLS client credentials; it does not receive role/root signing keys. Confirm endpoint hostname verification remains enabled and redirects/proxies remain disabled.
 
-## First pilot: signed file exchange
+## Acceptance evidence
 
-Use the existing CLI and an operator-approved authenticated file-transfer channel. This is a manual pilot, not a deployed network service. Do not expose CLI commands through an arbitrary remote shell or invent an unauthenticated HTTP wrapper. Transfer authentication, access controls, retention and confidentiality must be agreed and tested by operators. Signed evidence authenticates statements; it does not encrypt document contents.
+Use synthetic documents, fresh destination keys and a disposable pilot database. Record toolchain, platform, source/binary hashes, timestamp, role identities, expected outcome, actual outcome and logs for each check:
 
-On each of the three role hosts, from a private working directory:
+| Exercise | Required observation |
+|---|---|
+| Approve, execute, verify | Exact content/version bound; independently obtained fresh checkpoint matches |
+| Changed content / signer / receiver | Rejected without a document update |
+| Simultaneous identical retries | One durable version and original receipt |
+| Lost receiver reply | Recover the exact request; do not create a replacement authorization |
+| Witness unavailable after commit | Committed but unwitnessed; catch up in sequence after recovery |
+| Omitted/reordered/duplicated history | Rejected against the later trusted checkpoint |
+| Server/client identity errors | TLS or allowlist rejection; no downgrade |
+| Process stop and host restart | Recovery retains receipt, nonce and checkpoint state |
+| Clock rollback / expiry | Fail closed or explicitly report stale/unknown; never backdate production verification |
+| Backup restore | Stop admission, reconcile independently retained checkpoint; never silently accept rollback |
+| Certificate renewal | Operator-reviewed rotation, authorized clients retained, retired certificate rejected |
 
-```sh
-umask 077
-mkdir role
-chmod 700 role
-./openproof-witness keygen role/key.secret > role/public-key.json
-```
+Attach signed statements of separate control from both operators. Signature verification does not itself prove the statements true. Have the verifier obtain its genesis root and current checkpoint through its own authenticated channels. A bundled checkpoint is not an independent pin.
 
-Only receiver and witness initialize state:
+## Recovery and limits
 
-```sh
-./openproof-witness init role/state
-```
+Retain backups, public epoch records and trusted checkpoint floors. An uncertain effect is recovered with the original request. Local convenience rotation is disabled for remote homes; coordinate planned operator handover offline. Expired partial handover, emergency compromised-root recovery and live-state pruning remain unsupported operational gates. Stop admission and escalate instead of improvising rollback.
 
-Exchange only public keys using an authenticated channel and verify fingerprints independently. Provision identical `trust.json` on all roles, containing:
-
-- `version`: `openproof-witness/1`
-- `epoch`: positive integer, initially 1
-- `expires_at`: agreed Unix timestamp in the future
-- `authority`, `receiver`, `witness`: the respective public keys
-- `previous_authorities`, `revoked_authorities`: initially empty arrays
-
-Receiver and witness each run `./openproof-witness install role/state trust.json`. Trust is an operator-provisioned root; receiving a file from a caller is not sufficient to trust it. Compare its complete SHA-256 digest out of band. Clocks and durable host state remain trusted.
-
-1. Authority owner inspects the complete proposal JSON, document ID, expected version and intended receiver. The low-level command is privileged and does not prompt for consent:
-   `./openproof-witness approve role/key.secret trust.json < proposal.json > request.json`
-2. Send request.json to the receiver through the agreed channel within its five-minute validity window. Receiver runs:
-   `./openproof-witness receive role/state role/key.secret trust.json < request.json > receipt.json`
-3. Receiver sends receipt.json to the witness. Witness runs:
-   `./openproof-witness witness role/state role/key.secret trust.json < receipt.json > checkpoint.json`
-4. Witness sends checkpoint.json directly to the verifier through its independently authenticated channel and sends a copy to the receiver. Receiver runs:
-   `./openproof-witness export role/state trust.json < checkpoint.json > package.json`
-5. Verifier obtains package.json from receiver, its trust configuration from the agreed trust administrator, and its checkpoint from the witness. It runs:
-   `./openproof-witness verify trust.json checkpoint.json < package.json`
-
-Check every exit status before transferring output: shell redirection can leave empty files after failure. Never interpret a receipt alone as witness confirmation. Never obtain both trust roots and the checkpoint solely from an untrusted evidence producer.
-
-## Acceptance exercise
-
-Record timestamps, source archive digest, binary digests, host platforms, role owners and public keys. Keep private keys and real confidential documents out of the report. Use synthetic content initially.
-
-- Complete one authorized update and verify directly provisioned checkpoint.
-- Reject altered content, wrong receiver, unapproved input and expired approval.
-- Retry the identical still-valid request; observe the original receipt and one document version.
-- Stop witness delivery after a receiver commit. Mark outcome committed but unwitnessed. Recover receipts in order; do not create another update as a retry.
-- Reject a truncated package against the later checkpoint and a conflicting receipt at an existing sequence.
-- Exercise trust expiry and the same retained next-epoch configuration across both stores. Stop admission during change; partial installation requires completion, not rollback.
-- Test backups and recovery on expendable state. Never silently restore older state into service; reconcile witness pins before reopening admission.
-
-Attach operator-signed attestations of who controls each host and key. Technical signatures alone cannot prove organizational independence. No production acceptance until transport, recovery and key custody are reviewed and the selected hosts pass these exercises.
-
-## Limits
-
-The receiver is trusted to report its own SQLite outcome. A witness does not establish document truth, model correctness, universal completeness or physical effects. An old pinned checkpoint cannot establish that no newer event exists. Receiver/witness key migration, hardware key custody, remote authenticated delegation, production supervision and automated reconciliation remain unimplemented. The local broker expects all roles on one host and must not be represented as a remote client.
+The receiver attests its database outcome; the witness records signed order. Neither proves model truth, physical effects or honest operators. The bounded single-threaded Python TLS server has not undergone production network-abuse testing. The unit's resource limits are provisional and must be measured on the selected hosts. Independent machine build reproduction and human review remain required before stronger claims.
