@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:antagon-openproof:trust-schema:1",
+  "$defs": {
+    "Key": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "role": {
+          "enum": [
+            "authority",
+            "actor",
+            "executor"
+          ]
+        },
+        "not_before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "revoked_at": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "public_key",
+        "role",
+        "not_before",
+        "expires_at"
+      ]
+    },
+    "TrustBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "openproof-trust/1"
+        },
+        "audience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "issued_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/Key"
+          }
+        }
+      },
+      "required": [
+        "version",
+        "audience",
+        "revision",
+        "issued_at",
+        "expires_at",
+        "keys"
+      ]
+    },
+    "Anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "root_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "audience": {
+          "type": "string"
+        },
+        "minimum_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      "required": [
+        "root_key",
+        "audience",
+        "minimum_revision"
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "payload": {
+      "$ref": "#/$defs/TrustBundle"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{128}$"
+    }
+  },
+  "required": [
+    "payload",
+    "signature"
+  ]
+}

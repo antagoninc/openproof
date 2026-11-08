@@ -1,0 +1,2 @@
+-r ../reference/python/requirements.txt
+certifi==2026.10.23

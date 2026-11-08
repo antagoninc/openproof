@@ -1,0 +1,22 @@
+# Local execution state, credentials, caches and build products
+/outputs/
+/target/
+/fuzz/target/
+/fuzz/artifacts/
+**/__pycache__/
+*.py[cod]
+*.secret
+*.key
+*.pem
+*.p12
+*.pfx
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+.env
+.env.*
+.venv/
+venv/
+.DS_Store

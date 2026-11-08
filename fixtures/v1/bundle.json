@@ -1,0 +1,43 @@
+{
+  "authorization": {
+    "payload": {
+      "version": "openproof/1",
+      "run_id": "golden-run",
+      "nonce": "golden-nonce",
+      "audience": "golden-audience",
+      "actor_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+      "policy_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "action": {
+        "tool": "artifact.write",
+        "resource": "urn:openproof:artifact",
+        "arguments_sha256": "c5050bdaf40086e081386acce79d199a6c8302604b1ec73fc504b69237ab96c4"
+      },
+      "not_before": 90,
+      "expires_at": 110
+    },
+    "signature": "003313bf449dcaccae5a65562f7763abb85cbde86516fd1a8c5eb36670eb951ed95eb068e9a7365642ac6fcce9f7f51dbbd8fcaa55b5bdb9fb5d931743cd5d03"
+  },
+  "action": {
+    "payload": {
+      "version": "openproof/1",
+      "authorization_sha256": "22c4c0d37da06462df2fdda8f062543cd8a42a885b5b506537dfd130e8db1487",
+      "action": {
+        "tool": "artifact.write",
+        "resource": "urn:openproof:artifact",
+        "arguments_sha256": "c5050bdaf40086e081386acce79d199a6c8302604b1ec73fc504b69237ab96c4"
+      },
+      "claimed_at": 95
+    },
+    "signature": "cce78c025afb8efbde1129b2ed676a9dccbc1873171e3f329166dae67277f9070b09ac03284ce15ffe421f5ff667d80c75eca5797da015045317941d5ceb8c09"
+  },
+  "receipt": {
+    "payload": {
+      "version": "openproof/1",
+      "action_sha256": "dd31b867cdd4f41def69d13af896cd5dec5a17ec799a9790f8a891bf5bc50a14",
+      "observed_at": 99,
+      "outcome": "succeeded",
+      "output_sha256": "14ab4e46269680ecbb85e6b0d4759f06da736370ac744b41051f5dbf1b88262c"
+    },
+    "signature": "8fcd46d3a6a2ea10bcce9ed0b5f3b301abbdd0a4883aea1d73329eff1de3296ec6471a5669f389d2890f2efe53f2d97adfb3f9f9a00a5d564af49b6c8784120b"
+  }
+}

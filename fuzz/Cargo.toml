@@ -1,0 +1,50 @@
+[package]
+name = "openproof-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+[package.metadata]
+cargo-fuzz = true
+[dependencies]
+libfuzzer-sys = "0.4"
+ed25519-dalek = "2.2"
+openproof-core = { path = "../crates/openproof-core" }
+openproof-runtime = { path = "../crates/openproof-runtime" }
+serde_json = "1"
+openproof-trust = { path = "../crates/openproof-trust" }
+openproof-witness = { path = "../crates/openproof-witness" }
+[workspace]
+members = ["."]
+[[bin]]
+name = "evidence"
+path = "fuzz_targets/evidence.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "policy"
+path = "fuzz_targets/policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "trust"
+path = "fuzz_targets/trust.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "witness"
+path = "fuzz_targets/witness.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "witness_state"
+path = "fuzz_targets/witness_state.rs"
+test = false
+doc = false
+bench = false

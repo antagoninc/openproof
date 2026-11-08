@@ -1,0 +1,33 @@
+{
+  "payload": {
+    "version": "openproof-trust/1",
+    "audience": "golden-audience",
+    "revision": 2,
+    "issued_at": 80,
+    "expires_at": 1000,
+    "keys": [
+      {
+        "public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "role": "authority",
+        "not_before": 80,
+        "expires_at": 120,
+        "revoked_at": null
+      },
+      {
+        "public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+        "role": "actor",
+        "not_before": 80,
+        "expires_at": 120,
+        "revoked_at": null
+      },
+      {
+        "public_key": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+        "role": "executor",
+        "not_before": 80,
+        "expires_at": 120,
+        "revoked_at": null
+      }
+    ]
+  },
+  "signature": "7736e2f01c9d3c9f444759ba9ea9c2637b2d023a7a0567460f44f6a6f9205b04c14c3cf6c6e0824b0910ed236acd69f7e59285e62917c78bb3113525e70c4800"
+}

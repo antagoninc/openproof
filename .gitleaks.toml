@@ -1,0 +1,28 @@
+title = "OpenProof source secret scanning"
+[extend]
+useDefault = true
+
+# Exact PUBLIC Ed25519 fixture keys: three fixed test seeds and RFC 8032.
+# These are not private signing seeds or API tokens. Retain every default rule.
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+description = "Reviewed public test keys in fixed conformance fixtures"
+condition = "AND"
+regexTarget = "secret"
+regexes = [
+  '''^8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394$''',
+  '''^d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a$''',
+  '''^ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1$''',
+  '''^fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618$''',
+]
+paths = [
+  '''(^|/)examples/authorization\.json$''',
+  '''(^|/)fixtures/trust\-v1/anchor\.json$''',
+  '''(^|/)fixtures/trust\-v1/conformance\.json$''',
+  '''(^|/)fixtures/v1/bundle\.json$''',
+  '''(^|/)fixtures/v1/context\.json$''',
+  '''(^|/)fuzz/corpus/evidence/context$''',
+  '''(^|/)fuzz/corpus/evidence/valid\-bundle$''',
+  '''(^|/)fuzz/corpus/policy/valid\-policy$''',
+]

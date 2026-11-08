@@ -1,0 +1,10 @@
+{
+  "version": "openproof/1",
+  "authorization_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "action": {
+    "tool": "synthetic.echo",
+    "resource": "urn:openproof:synthetic",
+    "arguments_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "claimed_at": 95
+}

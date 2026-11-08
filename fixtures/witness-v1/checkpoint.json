@@ -1,0 +1,10 @@
+{
+  "payload": {
+    "count": 1,
+    "head": "b3935d96e8b009e7f1feebf02f8eade2b7f551059e49e4fe992b2ed98c49f8cc",
+    "observed_at": 1794109636,
+    "receiver": "5ea4f94f43887aacaff9df39009ae016270ca706e5b2c1ce0578231d4fc639bb",
+    "version": "openproof-witness/1"
+  },
+  "signature": "963a22118eeb135848fe011b7b0b8798a711952f32c943cfdda97e97a78e103e31a91902af58e06e7f430995ca64a18135b36982ef50cf6c44148bbd408d3301"
+}

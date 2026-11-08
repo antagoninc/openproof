@@ -1,0 +1,49 @@
+{
+  "checkpoint": {
+    "payload": {
+      "count": 1,
+      "head": "b3935d96e8b009e7f1feebf02f8eade2b7f551059e49e4fe992b2ed98c49f8cc",
+      "observed_at": 1794109636,
+      "receiver": "5ea4f94f43887aacaff9df39009ae016270ca706e5b2c1ce0578231d4fc639bb",
+      "version": "openproof-witness/1"
+    },
+    "signature": "963a22118eeb135848fe011b7b0b8798a711952f32c943cfdda97e97a78e103e31a91902af58e06e7f430995ca64a18135b36982ef50cf6c44148bbd408d3301"
+  },
+  "receipts": [
+    {
+      "payload": {
+        "approval_sha256": "12518090244519e36ed6688c255f7bb444673f761f562f133d6e1275db6597ee",
+        "content_sha256": "28b0efa044eb99c5bddf1ebdb50f522fc7b9e627ae94fde4ca59b1eaef73b0b0",
+        "document": "project-status",
+        "document_version": 1,
+        "kind": "update",
+        "observed_at": 1794109636,
+        "previous": "0000000000000000000000000000000000000000000000000000000000000000",
+        "reason": "",
+        "sequence": 1,
+        "version": "openproof-witness/1"
+      },
+      "signature": "0025824d9c7c0c8b6dbca6625da381611bd1940889771555955f27e2b0abb4a512b2cb1d169c2bba81006fdb9718c61fd20a7a2af191b10da746cfab5cbf680a"
+    }
+  ],
+  "requests": [
+    {
+      "approval": {
+        "payload": {
+          "authority": "619eee36ad8d1fdd3d9fe6907e9dbf9c9c14d2d5fc391de36e05dbea04bbb5db",
+          "content_sha256": "28b0efa044eb99c5bddf1ebdb50f522fc7b9e627ae94fde4ca59b1eaef73b0b0",
+          "document": "project-status",
+          "expected_version": 0,
+          "expires_at": 1794109936,
+          "nonce": "6fc297531918b3a113c04061ffd256b9ca72a9b01b5ffbca1b24b803274e93e3",
+          "not_before": 1794109636,
+          "receiver": "5ea4f94f43887aacaff9df39009ae016270ca706e5b2c1ce0578231d4fc639bb",
+          "version": "openproof-witness/1"
+        },
+        "signature": "8eb6e5f8fb2ccee2993ffd86b3fb98d2b88019c20acd148f54b6fa472a4823e44f2a2dbe32b09e52f852ef989fd1dddd096fb9e77679646c5c37378e8f941309"
+      },
+      "content": "OpenProof synthetic receiver-witness demonstration. No model was called."
+    }
+  ],
+  "version": "openproof-witness/1"
+}

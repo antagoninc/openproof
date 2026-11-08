@@ -1,0 +1,13 @@
+{
+  "payload": {
+    "authority": "42ba669caa4511172a4e08b7d7ee3cc2fce3e5727e5c2228eb80152dc8a82169",
+    "epoch": 1,
+    "expires_at": 1794198258,
+    "previous_authorities": [],
+    "receiver": "1a6ac6fab705c1757f94b3ce60e9bb1a6da833b5507d2e2549c73461038159d7",
+    "revoked_authorities": [],
+    "version": "openproof-witness/1",
+    "witness": "2cce49baf4c48aa17c6c548267780578a8d644400a37a920e9d91094045e9775"
+  },
+  "signature": "1164b6383cc94178c59853826d4e6f8e0fafdba811fe034be8017c417ac2edaed156e6788d8ef37ac135f96800e0c6a86ebfe4588f903eee87c5552ee4061a0f"
+}

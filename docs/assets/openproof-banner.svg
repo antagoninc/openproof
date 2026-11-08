@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="480" viewBox="0 0 1440 480" role="img" aria-labelledby="title description">
+  <title id="title">Antagon OpenProof</title>
+  <desc id="description">Signed evidence. Explicit trust. Rust-first, offline verification. An experimental project, version 0.5. Three linked records represent authorization, an action claim, and an optional executor receipt.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0c191d"/>
+      <stop offset="1" stop-color="#102a2b"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#a8efce" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#a8efce" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#bce8d8" stroke-opacity=".045"/>
+    </pattern>
+  </defs>
+  <rect width="1440" height="480" rx="24" fill="url(#background)"/>
+  <rect width="1440" height="480" rx="24" fill="url(#grid)"/>
+  <ellipse cx="1150" cy="246" rx="380" ry="300" fill="url(#glow)"/>
+  <path d="M818 48V432" stroke="#bce8d8" stroke-opacity=".13"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif">
+    <g transform="translate(64 52)" fill="none" stroke="#b6f3d2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M11 0H0V28H11M27 0H38V28H27"/>
+      <path d="M13 14H25M19 8V20"/>
+    </g>
+    <text x="121" y="73" font-size="18" font-weight="600" letter-spacing="4" fill="#b6f3d2">ANTAGON</text>
+    <text x="64" y="225" font-size="108" font-weight="650" letter-spacing="-5" fill="#f3f4ec">OpenProof</text>
+    <text x="68" y="285" font-size="32" font-weight="500" letter-spacing="-.4" fill="#c0f3d6">Signed evidence. Explicit trust.</text>
+    <text x="69" y="327" font-size="19" fill="#a5bab6">A Rust-first foundation for AI execution assurance.</text>
+    <rect x="68" y="382" width="125" height="34" rx="17" fill="#b6f3d2"/>
+    <text x="130.5" y="404" text-anchor="middle" font-size="13" font-weight="700" letter-spacing=".7" fill="#102925">RUST FIRST</text>
+    <rect x="205" y="382" width="196" height="34" rx="17" fill="none" stroke="#54746b"/>
+    <text x="303" y="404" text-anchor="middle" font-size="13" font-weight="600" letter-spacing=".5" fill="#d4e2d8">OFFLINE VERIFICATION</text>
+    <text x="423" y="404" font-size="13" letter-spacing=".8" fill="#e6c695">v0.5 / EXPERIMENTAL</text>
+    <text x="886" y="75" font-size="12" font-weight="600" letter-spacing="3" fill="#8fa9a3">THE EVIDENCE CHAIN</text>
+    <path d="M923 162V346" stroke="#81bca4" stroke-width="2"/>
+    <circle cx="923" cy="213" r="5" fill="#c4f4d8"/>
+    <circle cx="923" cy="321" r="5" fill="#e6c695"/>
+    <rect x="880" y="106" width="488" height="82" rx="14" fill="#183b36" stroke="#678e7f"/>
+    <text x="906" y="155" font-size="18" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" fill="#a5d6be">01</text>
+    <text x="959" y="143" font-size="22" font-weight="600" fill="#ecf4e9">Authorization</text>
+    <text x="960" y="167" font-size="14" fill="#a5beb3">Authority-signed scope</text>
+    <path d="M1329 136L1339 146L1329 156" stroke="#b6f3d2" stroke-width="2" fill="none"/>
+    <rect x="880" y="214" width="488" height="82" rx="14" fill="#17322f" stroke="#496c60"/>
+    <text x="906" y="263" font-size="18" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" fill="#a5d6be">02</text>
+    <text x="959" y="251" font-size="22" font-weight="600" fill="#ecf4e9">Action claim</text>
+    <text x="960" y="275" font-size="14" fill="#a5beb3">Bound to the authorization</text>
+    <path d="M1329 244L1339 254L1329 264" stroke="#b6f3d2" stroke-width="2" fill="none"/>
+    <rect x="880" y="322" width="488" height="82" rx="14" fill="#253730" stroke="#b79e74" stroke-dasharray="5 5"/>
+    <text x="906" y="371" font-size="18" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" fill="#e6c695">03</text>
+    <text x="959" y="359" font-size="22" font-weight="600" fill="#f5e6cc">Executor receipt</text>
+    <text x="960" y="383" font-size="14" fill="#c0b69e">Optional, separately signed outcome</text>
+  </g>
+</svg>

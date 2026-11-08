@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenProof signed witness trust, domain witness-trust/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "payload",
+    "signature"
+  ],
+  "properties": {
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "epoch",
+        "expires_at",
+        "authority",
+        "receiver",
+        "witness",
+        "previous_authorities",
+        "revoked_authorities"
+      ],
+      "properties": {
+        "version": {
+          "const": "openproof-witness/1"
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "authority": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "receiver": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "witness": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "previous_authorities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "revoked_authorities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "maxItems": 64,
+          "uniqueItems": true
+        }
+      }
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{128}$"
+    }
+  }
+}

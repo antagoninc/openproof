@@ -1,0 +1,10 @@
+{
+  "version": "openproof-witness/1",
+  "epoch": 1,
+  "expires_at": 1794196036,
+  "previous_authorities": [],
+  "revoked_authorities": [],
+  "authority": "619eee36ad8d1fdd3d9fe6907e9dbf9c9c14d2d5fc391de36e05dbea04bbb5db",
+  "receiver": "5ea4f94f43887aacaff9df39009ae016270ca706e5b2c1ce0578231d4fc639bb",
+  "witness": "ebdd7c4a412312a8fc8e8592998c28917a12c8f31213ffe969dbf81759980d31"
+}

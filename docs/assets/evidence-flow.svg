@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="560" viewBox="0 0 1280 560" role="img" aria-labelledby="title description">
+  <title id="title">The OpenProof evidence and verification flow</title>
+  <desc id="description">An authority-signed authorization is referenced by digest in an actor-signed action claim. An optional executor-signed receipt references the action digest. The signed evidence bundle and a separately trusted context enter an offline verifier. Its report distinguishes an authorized claim from executor-reported success or failure.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1 1L7 4L1 7" fill="none" stroke="#57796c" stroke-width="1.5"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="1278" height="558" rx="20" fill="#f6f8f3" stroke="#d9e3da"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif">
+    <text x="40" y="43" font-size="13" font-weight="700" letter-spacing="2.5" fill="#507362">SIGNED EVIDENCE BUNDLE</text>
+    <text x="1240" y="43" font-size="13" text-anchor="end" fill="#586e62">Every link binds the preceding payload.</text>
+    <rect x="40" y="72" width="344" height="142" rx="12" fill="#e0f0e5" stroke="#83a78f"/>
+    <text x="62" y="102" font-size="12" font-weight="700" letter-spacing="1.5" fill="#42684e">01 / AUTHORITY</text>
+    <text x="62" y="139" font-size="26" font-weight="650" fill="#153a29">Authorization</text>
+    <text x="62" y="169" font-size="16" fill="#3c5e48">Exact scope + validity window</text>
+    <text x="62" y="194" font-size="14" fill="#4e7059">Signed by the authority</text>
+    <path d="M386 143H465" stroke="#57796c" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <text x="425" y="128" font-size="12" text-anchor="middle" fill="#42684e">digest</text>
+    <rect x="468" y="72" width="344" height="142" rx="12" fill="#ffffff" stroke="#96afa0"/>
+    <text x="490" y="102" font-size="12" font-weight="700" letter-spacing="1.5" fill="#42684e">02 / ACTOR</text>
+    <text x="490" y="139" font-size="26" font-weight="650" fill="#153a29">Action claim</text>
+    <text x="490" y="169" font-size="16" fill="#3c5e48">Same action + authorization digest</text>
+    <text x="490" y="194" font-size="14" fill="#4e7059">Signed by the actor</text>
+    <path d="M814 143H893" stroke="#57796c" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <text x="853" y="128" font-size="12" text-anchor="middle" fill="#42684e">digest</text>
+    <rect x="896" y="72" width="344" height="142" rx="12" fill="#fbf0de" stroke="#b09870" stroke-dasharray="5 4"/>
+    <text x="918" y="102" font-size="12" font-weight="700" letter-spacing="1.5" fill="#7b6038">03 / EXECUTOR · OPTIONAL</text>
+    <text x="918" y="139" font-size="26" font-weight="650" fill="#5a4022">Receipt</text>
+    <text x="918" y="169" font-size="16" fill="#775c38">Reported outcome + action digest</text>
+    <text x="918" y="194" font-size="14" fill="#775c38">Signed by a distinct executor key</text>
+    <path d="M212 216V249H1068V216M640 216V292" fill="none" stroke="#91a99a" stroke-width="1.5"/>
+    <path d="M640 290V325" stroke="#57796c" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect x="550" y="266" width="180" height="24" fill="#f6f8f3"/>
+    <text x="640" y="283" font-size="14" text-anchor="middle" fill="#4b6957">Signed records</text>
+    <rect x="40" y="328" width="344" height="124" rx="12" fill="#eaf0f4" stroke="#9aafbd"/>
+    <text x="62" y="359" font-size="12" font-weight="700" letter-spacing="1.5" fill="#4b677b">SUPPLIED INDEPENDENTLY</text>
+    <text x="62" y="391" font-size="24" font-weight="650" fill="#23435a">Trusted context</text>
+    <text x="62" y="421" font-size="15" fill="#4b677b">Role keys · expected scope · time</text>
+    <path d="M386 389H465" stroke="#57796c" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect x="468" y="328" width="344" height="124" rx="12" fill="#173a2c"/>
+    <text x="490" y="359" font-size="12" font-weight="700" letter-spacing="1.5" fill="#b1d8bc">NO NETWORK REQUIRED</text>
+    <text x="490" y="391" font-size="24" font-weight="650" fill="#f0f6ea">Offline verifier</text>
+    <text x="490" y="421" font-size="15" fill="#c3dcc8">Signatures · bindings · context · time</text>
+    <path d="M814 389H893" stroke="#57796c" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect x="896" y="328" width="344" height="124" rx="12" fill="#ffffff" stroke="#96afa0"/>
+    <text x="918" y="359" font-size="12" font-weight="700" letter-spacing="1.5" fill="#42684e">EXPLICIT ASSURANCE</text>
+    <text x="918" y="391" font-size="24" font-weight="650" fill="#153a29">Verification report</text>
+    <text x="918" y="419" font-size="14" fill="#3c5e48">Authorized claim / reported success</text>
+    <text x="918" y="438" font-size="14" fill="#3c5e48">or reported failure</text>
+    <path d="M40 486H1240" stroke="#d9e3da"/>
+    <text x="640" y="520" font-size="16" text-anchor="middle" fill="#536a5b">Authenticity and binding are checked. Real-world effects and single-use enforcement are not established.</text>
+  </g>
+</svg>

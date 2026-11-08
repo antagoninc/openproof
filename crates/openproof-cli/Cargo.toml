@@ -1,0 +1,21 @@
+[package]
+name = "openproof-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+[[bin]]
+name = "openproof"
+path = "src/main.rs"
+[dependencies]
+openproof-core = { path = "../openproof-core" }
+serde.workspace = true
+serde_json.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true
+rand_core.workspace = true
+openproof-runtime = { path = "../openproof-runtime" }
+sha2.workspace = true
+
+openproof-trust = { path = "../openproof-trust" }

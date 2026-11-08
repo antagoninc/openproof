@@ -1,0 +1,1049 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenProof six-party planned handover v1",
+  "description": "Structural only; Rust checks equality, consent signatures, root anchor, cutover and validity window.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "old_root",
+    "new_root",
+    "old_receiver",
+    "new_receiver",
+    "old_witness",
+    "new_witness"
+  ],
+  "properties": {
+    "old_root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "old_root",
+            "new_root",
+            "old_trust_sha256",
+            "new_trust",
+            "checkpoint",
+            "not_before",
+            "expires_at"
+          ],
+          "properties": {
+            "version": {
+              "const": "openproof-rotation/1"
+            },
+            "old_root": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "new_root": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "old_trust_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "new_trust": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "epoch",
+                "expires_at",
+                "authority",
+                "receiver",
+                "witness",
+                "previous_authorities",
+                "revoked_authorities"
+              ],
+              "properties": {
+                "version": {
+                  "const": "openproof-witness/1"
+                },
+                "epoch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9223372036854775807
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                },
+                "authority": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "receiver": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "witness": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "previous_authorities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "maxItems": 64,
+                  "uniqueItems": true
+                },
+                "revoked_authorities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "maxItems": 64,
+                  "uniqueItems": true
+                }
+              }
+            },
+            "checkpoint": {
+              "type": "object",
+              "properties": {
+                "payload": {
+                  "$ref": "#/$defs/Checkpoint"
+                },
+                "signature": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{128}$"
+                }
+              },
+              "required": [
+                "payload",
+                "signature"
+              ],
+              "additionalProperties": false
+            },
+            "not_before": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "expires_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          }
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{128}$"
+        }
+      }
+    },
+    "new_root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "old_root",
+            "new_root",
+            "old_trust_sha256",
+            "new_trust",
+            "checkpoint",
+            "not_before",
+            "expires_at"
+          ],
+          "properties": {
+            "version": {
+              "const": "openproof-rotation/1"
+            },
+            "old_root": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "new_root": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "old_trust_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "new_trust": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "epoch",
+                "expires_at",
+                "authority",
+                "receiver",
+                "witness",
+                "previous_authorities",
+                "revoked_authorities"
+              ],
+              "properties": {
+                "version": {
+                  "const": "openproof-witness/1"
+                },
+                "epoch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9223372036854775807
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                },
+                "authority": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "receiver": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "witness": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "previous_authorities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "maxItems": 64,
+                  "uniqueItems": true
+                },
+                "revoked_authorities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "maxItems": 64,
+                  "uniqueItems": true
+                }
+              }
+            },
+            "checkpoint": {
+              "type": "object",
+              "properties": {
+                "payload": {
+                  "$ref": "#/$defs/Checkpoint"
+                },
+                "signature": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{128}$"
+                }
+              },
+              "required": [
+                "payload",
+                "signature"
+              ],
+              "additionalProperties": false
+            },
+            "not_before": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "expires_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          }
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{128}$"
+        }
+      }
+    },
+    "old_receiver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "old_root",
+            "new_root",
+            "old_trust_sha256",
+            "new_trust",
+            "checkpoint",
+            "not_before",
+            "expires_at"
+          ],
+          "properties": {
+            "version": {
+              "const": "openproof-rotation/1"
+            },
+            "old_root": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "new_root": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "old_trust_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "new_trust": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "epoch",
+                "expires_at",
+                "authority",
+                "receiver",
+                "witness",
+                "previous_authorities",
+                "revoked_authorities"
+              ],
+              "properties": {
+                "version": {
+                  "const": "openproof-witness/1"
+                },
+                "epoch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9223372036854775807
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                },
+                "authority": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "receiver": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "witness": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "previous_authorities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "maxItems": 64,
+                  "uniqueItems": true
+                },
+                "revoked_authorities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "maxItems": 64,
+                  "uniqueItems": true
+                }
+              }
+            },
+            "checkpoint": {
+              "type": "object",
+              "properties": {
+                "payload": {
+                  "$ref": "#/$defs/Checkpoint"
+                },
+                "signature": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{128}$"
+                }
+              },
+              "required": [
+                "payload",
+                "signature"
+              ],
+              "additionalProperties": false
+            },
+            "not_before": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "expires_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          }
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{128}$"
+        }
+      }
+    },
+    "new_receiver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "old_root",
+            "new_root",
+            "old_trust_sha256",
+            "new_trust",
+            "checkpoint",
+            "not_before",
+            "expires_at"
+          ],
+          "properties": {
+            "version": {
+              "const": "openproof-rotation/1"
+            },
+            "old_root": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "new_root": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "old_trust_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "new_trust": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "epoch",
+                "expires_at",
+                "authority",
+                "receiver",
+                "witness",
+                "previous_authorities",
+                "revoked_authorities"
+              ],
+              "properties": {
+                "version": {
+                  "const": "openproof-witness/1"
+                },
+                "epoch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9223372036854775807
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                },
+                "authority": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "receiver": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "witness": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "previous_authorities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "maxItems": 64,
+                  "uniqueItems": true
+                },
+                "revoked_authorities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "maxItems": 64,
+                  "uniqueItems": true
+                }
+              }
+            },
+            "checkpoint": {
+              "type": "object",
+              "properties": {
+                "payload": {
+                  "$ref": "#/$defs/Checkpoint"
+                },
+                "signature": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{128}$"
+                }
+              },
+              "required": [
+                "payload",
+                "signature"
+              ],
+              "additionalProperties": false
+            },
+            "not_before": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "expires_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          }
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{128}$"
+        }
+      }
+    },
+    "old_witness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "old_root",
+            "new_root",
+            "old_trust_sha256",
+            "new_trust",
+            "checkpoint",
+            "not_before",
+            "expires_at"
+          ],
+          "properties": {
+            "version": {
+              "const": "openproof-rotation/1"
+            },
+            "old_root": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "new_root": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "old_trust_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "new_trust": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "epoch",
+                "expires_at",
+                "authority",
+                "receiver",
+                "witness",
+                "previous_authorities",
+                "revoked_authorities"
+              ],
+              "properties": {
+                "version": {
+                  "const": "openproof-witness/1"
+                },
+                "epoch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9223372036854775807
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                },
+                "authority": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "receiver": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "witness": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "previous_authorities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "maxItems": 64,
+                  "uniqueItems": true
+                },
+                "revoked_authorities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "maxItems": 64,
+                  "uniqueItems": true
+                }
+              }
+            },
+            "checkpoint": {
+              "type": "object",
+              "properties": {
+                "payload": {
+                  "$ref": "#/$defs/Checkpoint"
+                },
+                "signature": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{128}$"
+                }
+              },
+              "required": [
+                "payload",
+                "signature"
+              ],
+              "additionalProperties": false
+            },
+            "not_before": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "expires_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          }
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{128}$"
+        }
+      }
+    },
+    "new_witness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "old_root",
+            "new_root",
+            "old_trust_sha256",
+            "new_trust",
+            "checkpoint",
+            "not_before",
+            "expires_at"
+          ],
+          "properties": {
+            "version": {
+              "const": "openproof-rotation/1"
+            },
+            "old_root": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "new_root": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "old_trust_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "new_trust": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "epoch",
+                "expires_at",
+                "authority",
+                "receiver",
+                "witness",
+                "previous_authorities",
+                "revoked_authorities"
+              ],
+              "properties": {
+                "version": {
+                  "const": "openproof-witness/1"
+                },
+                "epoch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9223372036854775807
+                },
+                "expires_at": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                },
+                "authority": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "receiver": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "witness": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "previous_authorities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "maxItems": 64,
+                  "uniqueItems": true
+                },
+                "revoked_authorities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "maxItems": 64,
+                  "uniqueItems": true
+                }
+              }
+            },
+            "checkpoint": {
+              "type": "object",
+              "properties": {
+                "payload": {
+                  "$ref": "#/$defs/Checkpoint"
+                },
+                "signature": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{128}$"
+                }
+              },
+              "required": [
+                "payload",
+                "signature"
+              ],
+              "additionalProperties": false
+            },
+            "not_before": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "expires_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          }
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{128}$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Approval": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": "openproof-witness/1"
+        },
+        "authority": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "document": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,80}$"
+        },
+        "expected_version": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "receiver": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "not_before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      "required": [
+        "version",
+        "authority",
+        "document",
+        "expected_version",
+        "content_sha256",
+        "nonce",
+        "receiver",
+        "not_before",
+        "expires_at"
+      ],
+      "additionalProperties": false
+    },
+    "Receipt": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": "openproof-witness/1"
+        },
+        "kind": {
+          "enum": [
+            "update",
+            "gap"
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "previous": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "approval_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "document": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "document_version": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "observed_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "sequence",
+        "previous",
+        "approval_sha256",
+        "document",
+        "document_version",
+        "content_sha256",
+        "observed_at",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "Checkpoint": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": "openproof-witness/1"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "observed_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "receiver": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "version",
+        "count",
+        "head",
+        "observed_at",
+        "receiver"
+      ],
+      "additionalProperties": false
+    },
+    "Request": {
+      "type": "object",
+      "properties": {
+        "approval": {
+          "type": "object",
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/Approval"
+            },
+            "signature": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{128}$"
+            }
+          },
+          "required": [
+            "payload",
+            "signature"
+          ],
+          "additionalProperties": false
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        }
+      },
+      "required": [
+        "approval",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "Package": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": "openproof-witness/1"
+        },
+        "requests": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/Request"
+          }
+        },
+        "receipts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/Receipt"
+              },
+              "signature": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{128}$"
+              }
+            },
+            "required": [
+              "payload",
+              "signature"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "checkpoint": {
+          "type": "object",
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/Checkpoint"
+            },
+            "signature": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{128}$"
+            }
+          },
+          "required": [
+            "payload",
+            "signature"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "version",
+        "requests",
+        "receipts",
+        "checkpoint"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

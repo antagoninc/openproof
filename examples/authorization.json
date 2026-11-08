@@ -1,0 +1,15 @@
+{
+  "version": "openproof/1",
+  "run_id": "synthetic-run-1",
+  "nonce": "synthetic-single-use-id",
+  "audience": "local-demo",
+  "actor_key": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+  "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "action": {
+    "tool": "synthetic.echo",
+    "resource": "urn:openproof:synthetic",
+    "arguments_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "not_before": 90,
+  "expires_at": 110
+}

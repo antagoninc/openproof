@@ -1,0 +1,6 @@
+Antagon OpenProof — experimental independent implementation
+
+New project contributions are intended for Apache-2.0 licensing, subject to contributor rights.
+No affiliation with or endorsement by TRACE is claimed.
+Antagon proprietary code, data, credentials, models, and trademarks are not licensed by this project.
+Third-party dependencies retain their own licenses; consult Cargo.lock and dependency license files.

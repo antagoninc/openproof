@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:antagon-openproof:root-transition:1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": "openproof-root-transition/1"
+    },
+    "audience": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "old_root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "new_root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "next_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "not_before": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "expires_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    }
+  },
+  "required": [
+    "version",
+    "audience",
+    "old_root",
+    "new_root",
+    "next_revision",
+    "not_before",
+    "expires_at"
+  ]
+}

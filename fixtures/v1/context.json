@@ -1,0 +1,15 @@
+{
+  "authority_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+  "actor_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+  "executor_key": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+  "run_id": "golden-run",
+  "nonce": "golden-nonce",
+  "audience": "golden-audience",
+  "policy_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "expected_action": {
+    "tool": "artifact.write",
+    "resource": "urn:openproof:artifact",
+    "arguments_sha256": "c5050bdaf40086e081386acce79d199a6c8302604b1ec73fc504b69237ab96c4"
+  },
+  "now": 100
+}

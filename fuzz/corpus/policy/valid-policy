@@ -1,0 +1,1 @@
+{"version": "openproof-policy/1", "audience": "fuzz", "executor_key": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1", "max_validity_seconds": 300, "allow": [{"tool": "artifact.write", "resource": "urn:openproof:artifact", "max_argument_bytes": 4096}]}

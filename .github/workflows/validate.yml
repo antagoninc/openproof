@@ -1,0 +1,56 @@
+name: Validate (no publication)
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      CARGO_INCREMENTAL: "0"
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: "1.27.3"
+          cache: false
+      - name: Scan source for secrets
+        shell: bash
+        run: |
+          case "${RUNNER_OS}:${RUNNER_ARCH}" in
+            Linux:X64) asset=linux_x64; digest=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
+            macOS:ARM64) asset=darwin_arm64; digest=b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 ;;
+            macOS:X64) asset=darwin_x64; digest=dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709 ;;
+            *) exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/openproof-gitleaks"
+          curl --fail --location --retry 3 "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_${asset}.tar.gz" -o "$RUNNER_TEMP/openproof-gitleaks/tool.tar.gz"
+          printf '%s  %s\n' "$digest" "$RUNNER_TEMP/openproof-gitleaks/tool.tar.gz" | shasum -a 256 --check
+          tar -xzf "$RUNNER_TEMP/openproof-gitleaks/tool.tar.gz" -C "$RUNNER_TEMP/openproof-gitleaks" gitleaks
+          "$RUNNER_TEMP/openproof-gitleaks/gitleaks" dir . --config .gitleaks.toml --redact
+      - name: Install pinned test tools
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal --component rustfmt --component clippy
+          rustup override set 1.92.0
+          python -m pip install -r scripts/requirements.txt jsonschema==4.25.1
+          cargo install cargo-audit --version 0.22.2 --locked
+      - name: Validate and create local provenance
+        run: python scripts/validate.py --out outputs/ci-validation
+      - name: Exercise restricted worker (no paid model calls)
+        if: runner.os == 'Linux'
+        run: |
+          python scripts/build_isolation.py --out outputs/ci-worker-build
+          python scripts/isolated_agent.py --provider fixture --image-id-file outputs/ci-worker-build/image-id --out outputs/ci-isolation

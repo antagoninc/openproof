@@ -1,0 +1,22 @@
+[workspace]
+members = ["crates/openproof-core", "crates/openproof-cli", "crates/openproof-runtime", "crates/openproof-trust", "crates/openproof-witness"]
+resolver = "2"
+
+[workspace.package]
+version = "0.9.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ed25519-dalek = { version = "2.2", features = ["rand_core", "zeroize"] }
+sha2 = "0.10"
+hex = "0.4"
+rand_core = { version = "0.6", features = ["getrandom"] }
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+proptest = "=1.11.0"
+
+zeroize = "1"
+libc = "0.2"
