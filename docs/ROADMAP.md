@@ -63,3 +63,9 @@ Open: independent host deployment/operators, fresh human review, sustained state
 One-command first-run setup, eight real synthetic tamper/retry experiments with an interactive recorded-results explorer, script-free archive viewer, separate offline verification report, crash-after-commit/concurrent-retry regression coverage, expanded stateful fuzz operations, reproducible validated-source reviewer packaging, current separate-host handoff, compatibility policy and controlled release checklist.
 
 These are local implementation work, not evidence of external deployment or review. Independent hosts/operators, human review, independent build reproduction and explicit public publication approval remain open. See the current validation report for measured outcomes; do not infer those gates from passing CI.
+
+## Daily operations milestone
+
+Receipt-only recovery center, local certificate health warnings, explicitly staged/activated TLS generations, tested client overlap/retirement and server renewal, seeded crash/restart campaigns and reproducible latency/storage/child-memory benchmarks. Weekly local adversarial checks are selected for Mondays at 3 a.m.
+
+Still open: independent operators and human review, emergency compromised-key recovery, power-loss validation, live-state pruning, remote CA lifecycle and measured production capacity. Template or local TLS acceptance does not satisfy independent-host acceptance.

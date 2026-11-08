@@ -53,3 +53,9 @@ Review `history_viewer.py`, `verify_history.py`, `assurance_lab.py`, `quickstart
 Exercise process death after receiver commit followed by concurrent retries, monotonic review expiry despite wall-clock changes, and the expanded stateful fuzz operations. Review source-only packaging, exact source digest checks and the systemd template against the eventual host configuration. Template preparation is not evidence of deployment. Request fresh certificate lifecycle, host-abuse and recovery tests from the real operators.
 
 The reviewer package now requires `--validation COMPLETED_VALIDATION_DIRECTORY` and rejects modified source or missing required checks. Its deterministic archive contains source and a bounded validation summary, not private runtime logs or state. Record the SHA256SUMS digest in the engagement and in every finding. Local build signature keys are development-only and must not become release trust anchors.
+
+## Daily operations review additions
+
+Review `certificate_lifecycle.py`, the role service's pre-connection and pre-operation generation checks, `recovery_center.py` and `Broker.commit(recover_only=True)`. Confirm missing receipts cannot dispatch, bad TLS generation data does not fall back to retired permissions, accepted connections cannot cross an authorization-generation change, and expired partial handovers remain paused. Inspect private directory/key permissions, activation compare-and-swap and flush boundaries, chain/hostname responsibilities, and local-time assumptions. Test owner HTTP authorization on the new routes.
+
+Reproduce the benchmark and longer seeded process-crash campaign. Distinguish process boundaries from power-loss testing and largest-child RSS from aggregate memory. Review the actual independent-host CA renewal and retirement procedure before deployment. No new local tests satisfy the human-review gate.

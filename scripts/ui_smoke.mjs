@@ -25,7 +25,10 @@ try{
  await evaluate("document.querySelector('#items button').click()");await until(()=>evaluate("document.querySelector('#items small')?.textContent.includes('Verified locally')"));
  await evaluate("document.querySelector('#items button').click()");await until(()=>evaluate("!busy && document.getElementById('message').textContent.includes('did not create a second update')"));
  const status=await evaluate("api('status')");if(status.items[0].document_version!==1)throw Error('Duplicate execution');
+ await evaluate("document.getElementById('recovery-refresh').click()");await until(()=>evaluate("!busy && document.querySelector('#recovery-items button')?.textContent==='Recover existing result'"));
+ await evaluate("document.querySelector('#recovery-items button').click()");await until(()=>evaluate("!busy && document.getElementById('message').textContent.includes('Existing result recovered')"));
+ const recovery=await evaluate("api('recovery')");if(recovery.heads.receiver!==1||recovery.heads.witness!==1)throw Error('Recovery duplicated an effect');
  const screenshot=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync(path.join(out,'app.png'),Buffer.from(screenshot.data,'base64'));
- fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({passed:true,proposal_review_approval_execution_retry:true,untrusted_content_rendered_as_text:true,version_after_retry:1,external_model_calls:0},null,2));
+ fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({passed:true,proposal_review_approval_execution_retry:true,untrusted_content_rendered_as_text:true,version_after_retry:1,receipt_only_recovery:true,external_model_calls:0},null,2));
  console.log('Browser workflow passed: exact review, approval, execution, retry and text isolation.');
 }finally{if(ws)ws.close();if(chrome)chrome.kill();app.kill();}

@@ -31,6 +31,8 @@ OpenProof connects an exact authorization to a bounded action, a receiver's exec
 | **Incremental evidence** | Verifies bounded pages while retaining nonce, version and checkpoint state |
 | **Planned key handover** | Preserves history through a six-party signed transition with stopped admission and recovery |
 | **Portable verification** | Reconstructs signed history offline in a separate Go implementation |
+| **Daily recovery** | Inspects interrupted actions and refreshes existing receipts without dispatching unexecuted work |
+| **Certificate lifecycle** | Warns about expiry and stages explicit TLS renewals/client retirement |
 | **Authenticated services** | Uses mutual TLS and explicit client identities for receiver/witness endpoints |
 
 The local browser app provides exact-content review, readable outcomes, retry/recovery and evidence export. It renders model-provided text as text, never as commands or executable HTML. Agent-facing tools can propose and commit approved work; they cannot grant owner approval.
@@ -72,7 +74,7 @@ outputs/local-venv/bin/python scripts/verify_history.py EXTRACTED_ARCHIVE \
   --go-binary outputs/tooling/openproof-go-verify --out outputs/my-offline-check
 ```
 
-[Compatibility policy](docs/COMPATIBILITY.md) · [Controlled preview checklist](docs/RELEASE-CHECKLIST.md)
+[Daily operations and measurements](docs/OPERATIONS.md) · [Compatibility policy](docs/COMPATIBILITY.md) · [Controlled preview checklist](docs/RELEASE-CHECKLIST.md)
 
 ## What the evidence means
 

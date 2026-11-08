@@ -30,7 +30,9 @@ class Owner:
                 cp=ref.read(path.parent/'checkpoint.json')['payload'];fresh=0<=time.time()-cp['observed_at']<=300
                 if item and a.get('verification_status')=='local_consistency_verified':item.update(stage='Verified locally' if fresh else 'Evidence needs refresh',evidence_id=path.parent.name,complete_history=a.get('complete_history',False),assessment_recorded=True)
             except Exception:pass
-        return dict(items=items,remote_services=(h/'service-client.json').exists(),paging=(h/'paging.json').exists(),paused=(h/'rotation-pending.json').exists(),scope='Local receiver database; one host owner. Saved assessments are observations, not a fresh independent audit.')
+        from recovery_center import rotation_status
+        rotation=rotation_status(h)
+        return dict(rotation_resumable=rotation['can_resume'],rotation_message=rotation.get('message',''),items=items,remote_services=(h/'service-client.json').exists(),paging=(h/'paging.json').exists(),paused=(h/'rotation-pending.json').exists(),scope='Local receiver database; one host owner. Saved assessments are observations, not a fresh independent audit.')
     def review(self,identity):
         with home_lock(self.home):
             require_admission(self.home);p=ref.read(self.broker.file('proposals',identity))
@@ -84,6 +86,12 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authenticated():return self.reply(401,{'error':'Open this app using its local launcher'})
         try:
             if self.path=='/api/session':return self.reply(200,{'csrf':self.server.owner.csrf})
+            if self.path=='/api/certificates':
+                from recovery_center import certificate_status
+                return self.reply(200,certificate_status(self.server.owner.home))
+            if self.path=='/api/recovery':
+                from recovery_center import inventory
+                return self.reply(200,inventory(self.server.owner))
             if self.path=='/api/status':return self.reply(200,self.server.owner.status())
             if re.fullmatch(r'/api/download/[0-9a-f]{32}',self.path):
                 path=self.server.owner.home/'exports'/(self.path.rsplit('/',1)[1]+'.zip')
@@ -108,6 +116,10 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path=='/api/repropose':ref.fields(v,['id']);result=o.repropose(v['id'])
             elif self.path=='/api/approve':ref.fields(v,['id','review_token']);result=o.approve(v['id'],v['review_token'])
             elif self.path=='/api/commit':ref.fields(v,['id']);result=o.broker.commit(v['id']);result.pop('evidence_directory',None)
+            elif self.path=='/api/recover':
+                ref.fields(v,['id'])
+                from recovery_center import recover
+                result=recover(o,v['id']);result.pop('evidence_directory',None)
             elif self.path=='/api/paging':ref.fields(v,[]);result=enable(o.home)
             elif self.path=='/api/rotation/prepare':
                 ref.fields(v,['confirmation'])

@@ -109,7 +109,7 @@ class Broker:
             self.file('proposals',identity).unlink(missing_ok=True)
         return {'proposal_id':identity,'state':'approved','expires_at':q['approval']['payload']['expires_at']}
     @serialized
-    def commit(self,identity):
+    def commit(self,identity,*,recover_only=False):
         require_admission(self.home)
         q=ref.read(self.file('approved',identity));h=self.home
         if not (h/'trust-signed.json').exists() or not (h/'verifier').is_dir():raise RuntimeError('owner must run upgrade-trust before dispatch')
@@ -121,6 +121,7 @@ class Broker:
         # remain unchanged in receive, including expiry, retirement and revocation.
         receipt=call(['recover',h/'receiver/state'],q)
         if receipt is None:
+            if recover_only:raise ValueError('No durable receipt; recovery cannot execute an action')
             if not evidence_capacity(h):return dict(base,status='not_committed',execution_status='not_committed',verification_status='not_verified',error_code='evidence_storage_capacity')
             try:receipt=call(['receive',h/'receiver/state',h/'receiver/key.secret',h/'trust.json'],q)
             except Exception:
