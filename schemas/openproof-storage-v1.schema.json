@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:antagon-openproof:storage:1",
+  "description": "Structural checks only. Rust also enforces key validity, origin/key restrictions, time relationships, signatures and binding.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Authorization"
+    },
+    {
+      "$ref": "#/$defs/Observation"
+    }
+  ],
+  "$defs": {
+    "Authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "authority",
+        "endpoint",
+        "bucket",
+        "object_key",
+        "content_sha256",
+        "content_bytes",
+        "nonce",
+        "not_before",
+        "expires_at"
+      ],
+      "properties": {
+        "version": {
+          "const": "openproof-storage-upload/1"
+        },
+        "authority": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^https://[a-z0-9.-]+(:[0-9]{1,5})?$"
+        },
+        "bucket": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
+        },
+        "object_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9_./-]+$"
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "content_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "not_before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      }
+    },
+    "Observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "adapter",
+        "authorization_sha256",
+        "kind",
+        "request_started_at",
+        "observed_at"
+      ],
+      "properties": {
+        "version": {
+          "const": "openproof-storage-observation/1"
+        },
+        "adapter": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "authorization_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "kind": {
+          "enum": [
+            "provider_acknowledgment",
+            "read_back_match"
+          ]
+        },
+        "request_started_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "observed_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      }
+    }
+  }
+}

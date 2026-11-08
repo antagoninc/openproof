@@ -45,3 +45,9 @@ The receiver attests its database outcome; the witness records signed order. Nei
 ## Current operational additions
 
 Use [daily operations](../OPERATIONS.md) for receipt-only recovery, expiry inspection, staged TLS renewal, client retirement, longer crash campaigns and disclosed measurements. The existing systemd template uses manual TLS files; operators may replace its manual TLS flags with `--tls-bundle /etc/openproof/tls` after reviewing and provisioning private generations. Do not add both forms. Test service-user access and unit syntax on the actual Linux host. Benchmark before choosing limits, and capture independent-host certificate/connection retirement results in the acceptance record.
+
+## Storage and retention acceptance additions
+
+The owner selected local S3-compatible preparation only. A real provider/bucket/credential environment and permission for a synthetic upload are still required. Follow [storage pilot](../STORAGE-PILOT.md) before any provider call; verify conditional creation, redirects/region behavior, checksum and read-back behavior on the actual service. Do not copy fixture credentials or imply the adapter signature is a provider signature.
+
+Follow [archive retention](../ARCHIVAL.md) to retain a verified public copy and separately pinned seal, leaving live databases intact. Record the real backup mechanism, permissions, newer independent checkpoint and restore result on an expendable separate host. No pruning, automatic restoration or trust reset is authorized by this package.

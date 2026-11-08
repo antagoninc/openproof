@@ -77,3 +77,6 @@ print('PASS: signed witness trust structural schema')
 for name in ['openproof-history-page-v1.schema.json','openproof-rotation-v1.schema.json','openproof-portable-history-v1.schema.json']:
     Draft202012Validator.check_schema(json.loads((ROOT/'schemas'/name).read_text()))
 print('PASS: page and planned handover schema structure (semantic rules enforced in Rust)')
+
+Draft202012Validator.check_schema(json.loads((ROOT/'schemas/openproof-storage-v1.schema.json').read_text()))
+print('PASS: storage schema structure; semantic/instance checks run in Rust and storage tests')

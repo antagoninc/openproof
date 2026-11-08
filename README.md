@@ -31,6 +31,7 @@ OpenProof connects an exact authorization to a bounded action, a receiver's exec
 | **Incremental evidence** | Verifies bounded pages while retaining nonce, version and checkpoint state |
 | **Planned key handover** | Preserves history through a six-party signed transition with stopped admission and recovery |
 | **Portable verification** | Reconstructs signed history offline in a separate Go implementation |
+| **Storage pilot** | Binds report bytes and destination for conditional S3 creation; distinguishes adapter acknowledgment from read-back |
 | **Daily recovery** | Inspects interrupted actions and refreshes existing receipts without dispatching unexecuted work |
 | **Certificate lifecycle** | Warns about expiry and stages explicit TLS renewals/client retirement |
 | **Authenticated services** | Uses mutual TLS and explicit client identities for receiver/witness endpoints |
@@ -74,7 +75,7 @@ outputs/local-venv/bin/python scripts/verify_history.py EXTRACTED_ARCHIVE \
   --go-binary outputs/tooling/openproof-go-verify --out outputs/my-offline-check
 ```
 
-[Daily operations and measurements](docs/OPERATIONS.md) · [Compatibility policy](docs/COMPATIBILITY.md) · [Controlled preview checklist](docs/RELEASE-CHECKLIST.md)
+[Storage pilot](docs/STORAGE-PILOT.md) · [Archive retention](docs/ARCHIVAL.md) · [TRACE comparison scope](docs/COMPARISON.md) · [Daily operations and measurements](docs/OPERATIONS.md) · [Compatibility policy](docs/COMPATIBILITY.md) · [Controlled preview checklist](docs/RELEASE-CHECKLIST.md)
 
 ## What the evidence means
 

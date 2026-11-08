@@ -9,3 +9,5 @@ OpenProof is experimental. Cargo package versions and signed evidence format ver
 - Upgrades require backups, recorded trusted roots/checkpoint floors and a tested recovery procedure. Database migration, pruning and emergency compromised-root recovery are not promised. Never clear replay state to make an upgrade pass.
 - Planned handover requires the existing six-signature protocol and exact retained plan. It is not emergency recovery. Preserve epoch records for offline reconstruction.
 - Before breaking changes, document old/new behavior, affected artifacts, migration commands, rollback limits and deprecation window. No stable support window is promised before an explicitly approved release.
+
+The storage pilot introduces separate `openproof-storage-upload/1` and `openproof-storage-observation/1` records. They are not document receipts or TRACE records. Rust CLI verification and independent Python signature checks cover the pilot; the Go archive verifier does not verify these storage observations. No document wire format changed.

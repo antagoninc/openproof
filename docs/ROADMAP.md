@@ -69,3 +69,11 @@ These are local implementation work, not evidence of external deployment or revi
 Receipt-only recovery center, local certificate health warnings, explicitly staged/activated TLS generations, tested client overlap/retirement and server renewal, seeded crash/restart campaigns and reproducible latency/storage/child-memory benchmarks. Weekly local adversarial checks are selected for Mondays at 3 a.m.
 
 Still open: independent operators and human review, emergency compromised-key recovery, power-loss validation, live-state pruning, remote CA lifecycle and measured production capacity. Template or local TLS acceptance does not satisfy independent-host acceptance.
+
+## Storage, comparison and retention milestone
+
+A separate Rust-authorized S3-compatible report pilot is implemented and tested only against loopback HTTPS fixtures. It binds destination/bytes, conditions creation on absence, reserves attempts durably and distinguishes signed adapter acknowledgment from signed same-provider read-back. It does not automatically inherit the document trust/revocation lifecycle, prove independent storage, or authorize a real provider upload.
+
+The new TRACE SDK property suite measures six shared acceptance/rejection checks without a performance ranking and explicitly leaves runtime/hardware/registry capabilities unassessed. A 42-logical-day retention test covers 168 updates, daily trust renewal, replay and stale-backup reconciliation. Public archive copying is verified and hash-pinned without live-state pruning. Neither accelerated testing nor an archive seal proves long elapsed operation, fresh trust or independent custody.
+
+Next external gates remain selected storage/provider credentials, actual separate operators, a human reviewer and independent-machine reproduction. No public release follows from these tests.
