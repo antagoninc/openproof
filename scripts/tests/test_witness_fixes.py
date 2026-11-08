@@ -1,12 +1,12 @@
 """Regressions for Claude F1/F2/F5; approvals are simulated test responses."""
 
-import contextlib, io, json, subprocess, sys, tempfile, unittest
+import contextlib, io, json, sqlite3, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from witness_workflow import Broker, initialize, call
+from witness_workflow import Broker, initialize, call, gate_list
 
 
 class Fixes(unittest.TestCase):
@@ -32,9 +32,11 @@ class Fixes(unittest.TestCase):
         first = self.b.propose("pending", 0, "x")["proposal_id"]
         for _ in range(1001):
             self.b.propose("pending", 0, "x")
-        self.assertEqual(len(list((self.h / "proposals").glob("*.json"))), 1000)
-        self.assertFalse(self.b.file("proposals", first).exists())
-        self.assertTrue(self.b.file("approved", identity).exists())
+        listing = gate_list(self.h)
+        pending = [p["id"] for p in listing["proposals"]]
+        self.assertEqual(len(pending), 1000)
+        self.assertNotIn(first, pending)
+        self.assertEqual([a["id"] for a in listing["approved"]], [identity])
         self.assertEqual(self.b.commit(identity)["document_version"], 1)
 
     def test_outage_reports_committed_and_catches_up_without_receive(self):
@@ -133,7 +135,7 @@ class Fixes(unittest.TestCase):
             )
         self.assertEqual(call(["head", self.h / "receiver/state"])["count"], 4)
 
-    def test_open_owner_review_does_not_block_commit_or_change_snapshot(self):
+    def test_open_owner_review_does_not_block_commit_and_change_is_refused(self):
         prior = self.approved("prior")
         p = self.b.propose("review", 0, "reviewed bytes")
 
@@ -143,28 +145,24 @@ class Fixes(unittest.TestCase):
                 self.b.commit(prior)["verification_status"],
                 "local_consistency_verified",
             )
-            # Capture, not a later file read, determines the signed content.
-            self.b.file("proposals", p["proposal_id"]).write_text(
-                json.dumps(
-                    {
-                        "document": "review",
-                        "expected_version": 0,
-                        "content": "changed bytes",
-                    }
-                )
+            # A change to the stored proposal after review is refused by the gate.
+            changed = dict(document="review", expected_version=0, content="changed")
+            db = sqlite3.connect(self.h / "authority/gate/gate.db")
+            db.execute(
+                "UPDATE proposals SET proposal=? WHERE id=?",
+                (json.dumps(changed), p["proposal_id"]),
             )
+            db.commit()
+            db.close()
             return "APPROVE " + p["content_sha256"][:12]
 
         with contextlib.redirect_stdout(io.StringIO()):
-            self.b.approve(p["proposal_id"], reader=reader)
-        self.assertEqual(
-            self.b.commit(p["proposal_id"])["verification_status"],
-            "local_consistency_verified",
-        )
-        self.assertEqual(
-            call(["document", self.h / "receiver/state", "review"])["content"],
-            "reviewed bytes",
-        )
+            with self.assertRaisesRegex(RuntimeError, "does not match"):
+                self.b.approve(p["proposal_id"], reader=reader)
+        with self.assertRaises(FileNotFoundError):
+            self.b.commit(p["proposal_id"])
+        with self.assertRaises(RuntimeError):
+            call(["document", self.h / "receiver/state", "review"])
 
     def test_failed_admission_is_not_committed(self):
         identity = self.approved()

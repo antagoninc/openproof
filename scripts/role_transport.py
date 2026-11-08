@@ -97,8 +97,6 @@ def initialize_client(home, authority_key, root, signed_trust, configuration):
         "authority",
         "receiver",
         "witness",
-        "proposals",
-        "approved",
         "evidence",
     ]:
         (h / name).mkdir(mode=0o700)

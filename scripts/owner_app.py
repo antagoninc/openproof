@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Local owner UI. Loopback only, explicit session, exact review binding, no arbitrary tools."""
+"""Local owner UI. Loopback only, explicit session, exact review binding, no arbitrary tools.
+Every approval decision is made by the Rust approval gate; this app relays it."""
 
 import argparse, base64, errno, hashlib, hmac, http.cookies, json, os, secrets, sys, time, threading, webbrowser, uuid, zipfile, re
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -14,6 +15,7 @@ from witness_workflow import (
     home_lock,
     require_admission,
     enroll_passkey,
+    gate_list,
 )
 from paged_workflow import enable, replace_json
 
@@ -34,12 +36,6 @@ def b64decode(text, limit):
     if b64encode(raw) != text or not 0 < len(raw) <= limit:
         raise ValueError("noncanonical or oversized base64url")
     return raw
-
-
-def approval_digest(request):
-    payload = request["approval"]["payload"]
-    preimage = b"OpenProof/v1/document-approval/1\0" + ref.canonical(payload)
-    return hashlib.sha256(preimage).hexdigest()
 
 
 def sec1_point(spki):
@@ -158,49 +154,41 @@ class Owner:
 
     def status(self):
         h = self.home
-        items = []
-        for folder in ["proposals", "approved"]:
-            for path in sorted((h / folder).glob("*.json")):
-                item = {
-                    "id": path.stem,
-                    "stage": (
-                        "Awaiting approval" if folder == "proposals" else "Approved"
-                    ),
-                }
-                try:
-                    value = ref.read(path)
-                    p = (
-                        value
-                        if folder == "proposals"
-                        else dict(
-                            document=value["approval"]["payload"]["document"],
-                            expected_version=value["approval"]["payload"][
-                                "expected_version"
-                            ],
-                            content=value["content"],
-                        )
-                    )
+        listing = gate_list(h)
+        items = [
+            dict(
+                id=p["id"],
+                stage="Awaiting approval",
+                document=p["document"],
+                expected_version=p["expected_version"],
+            )
+            for p in listing["proposals"]
+        ]
+        for a in listing["approved"]:
+            item = dict(
+                id=a["id"],
+                stage="Approved",
+                document=a["document"],
+                expected_version=a["expected_version"],
+            )
+            try:
+                r = call(
+                    ["recover", h / "receiver/state"], self.broker.request(a["id"])
+                )
+                if r:
                     item.update(
-                        document=p["document"], expected_version=p["expected_version"]
+                        stage="Committed",
+                        document_version=r["payload"]["document_version"],
                     )
-                    if folder == "approved":
-                        r = call(["recover", h / "receiver/state"], value)
-                        if r:
-                            item.update(
-                                stage="Committed",
-                                document_version=r["payload"]["document_version"],
-                            )
-                        elif (
-                            self.current_version(p["document"]) > p["expected_version"]
-                        ):
-                            # The document moved on after this approval: the
-                            # receiver will refuse it, so do not offer Execute.
-                            item["stage"] = "Superseded"
-                        elif time.time() > value["approval"]["payload"]["expires_at"]:
-                            item["stage"] = "Approval expired"
-                except Exception:
-                    item["stage"] = "Needs recovery"
-                items.append(item)
+                elif self.current_version(a["document"]) > a["expected_version"]:
+                    # The document moved on after this approval: the
+                    # receiver will refuse it, so do not offer Execute.
+                    item["stage"] = "Superseded"
+                elif time.time() > a["expires_at"]:
+                    item["stage"] = "Approval expired"
+            except Exception:
+                item["stage"] = "Needs recovery"
+            items.append(item)
         index = {i["id"]: i for i in items}
         for path in sorted(
             (h / "evidence").glob("*/assessment.json"),
@@ -238,30 +226,22 @@ class Owner:
         )
 
     def review(self, identity):
-        with home_lock(self.home):
-            require_admission(self.home)
-            p = ref.read(self.broker.file("proposals", identity))
+        r = self.broker.review(identity)
         self.reviews = {
             k: v for k, v in self.reviews.items() if time.monotonic() - v["time"] < 300
         }
         if len(self.reviews) >= 100:
             raise ValueError("Too many outstanding reviews")
         token = secrets.token_hex(32)
-        digest = hashlib.sha256(ref.canonical(p)).hexdigest()
         self.reviews[token] = dict(
-            identity=identity, digest=digest, time=time.monotonic()
+            identity=identity, reviewed=r["review_sha256"], time=time.monotonic()
         )
-        return dict(
-            review_token=token,
-            proposal=p,
-            proposal_sha256=digest,
-            content_sha256=hashlib.sha256(p["content"].encode()).hexdigest(),
-        )
+        return dict(r, review_token=token)
 
     def repropose(self, identity):
         with home_lock(self.home):
             require_admission(self.home)
-            q = ref.read(self.broker.file("approved", identity))
+            q = self.broker.request(identity)
             if time.time() <= q["approval"]["payload"]["expires_at"]:
                 raise ValueError("Approval still active")
             if call(["recover", self.home / "receiver/state"], q) is not None:
@@ -285,25 +265,19 @@ class Owner:
             raise ValueError("Review expired; review the action again")
         with home_lock(self.home):
             require_admission(self.home)
-            p = ref.read(self.broker.file("proposals", identity))
-            if hashlib.sha256(ref.canonical(p)).hexdigest() != review["digest"]:
-                raise ValueError("Proposal changed; review it again")
-            if len(list((self.home / "approved").glob("*.json"))) >= 1000:
-                raise ValueError("Approval storage capacity reached")
-            q = call(
+            # The gate refuses unless the stored proposal still has the reviewed
+            # binding. With an owner passkey it keeps the approval pending.
+            r = call(
                 [
-                    "approve",
-                    self.home / "authority/key.secret",
+                    "gate-approve",
+                    self.home,
                     self.home / "trust.json",
-                ],
-                p,
+                    identity,
+                    review["reviewed"],
+                ]
             )
-            configured, credential = self.passkey()
-            if not configured:
-                save(self.broker.file("approved", identity), q)
-                self.broker.file("proposals", identity).unlink(missing_ok=True)
-                return {"status": "approved", "id": identity}
-        # The signed request is held until the owner's passkey signs its digest.
+        if r["state"] == "approved":
+            return {"status": "approved", "id": identity}
         self.assertions = {
             k: v
             for k, v in self.assertions.items()
@@ -312,22 +286,17 @@ class Owner:
         if len(self.assertions) >= 100:
             raise ValueError("Too many outstanding passkey approvals")
         token = secrets.token_hex(32)
-        digest = approval_digest(q)
         self.assertions[token] = dict(
-            identity=identity,
-            proposal=review["digest"],
-            request=q,
-            digest=digest,
-            time=time.monotonic(),
+            identity=identity, digest=r["approval_sha256"], time=time.monotonic()
         )
         return dict(
             status="passkey_required",
             id=identity,
             assertion_token=token,
-            approval_sha256=digest,
-            challenge=b64encode(bytes.fromhex(digest)),
-            rp_id=configured["rp_id"],
-            credential_id=credential,
+            approval_sha256=r["approval_sha256"],
+            challenge=r["challenge"],
+            rp_id=r["rp_id"],
+            credential_id=self.passkey()[1],
         )
 
     def approve_passkey(self, identity, token, assertion):
@@ -338,22 +307,20 @@ class Owner:
             or time.monotonic() - pending["time"] > 300
         ):
             raise ValueError("Passkey approval expired; review the action again")
-        ref.fields(assertion, ["authenticator_data", "client_data_json", "signature"])
-        if not all(isinstance(x, str) for x in assertion.values()):
-            raise ValueError("Invalid passkey assertion")
-        q = dict(pending["request"], owner_assertion=assertion)
         with home_lock(self.home):
             require_admission(self.home)
-            p = ref.read(self.broker.file("proposals", identity))
-            if hashlib.sha256(ref.canonical(p)).hexdigest() != pending["proposal"]:
-                raise ValueError("Proposal changed; review it again")
-            if len(list((self.home / "approved").glob("*.json"))) >= 1000:
-                raise ValueError("Approval storage capacity reached")
-            checked = call(["check-assertion", self.home / "trust.json"], q)
-            if checked["approval_sha256"] != pending["digest"]:
-                raise ValueError("Approval digest mismatch")
-            save(self.broker.file("approved", identity), q)
-            self.broker.file("proposals", identity).unlink(missing_ok=True)
+            # The gate verifies the assertion against the pending approval's digest
+            # and stores it as approved, once.
+            call(
+                [
+                    "gate-approve-passkey",
+                    self.home,
+                    self.home / "trust.json",
+                    identity,
+                    pending["digest"],
+                ],
+                assertion,
+            )
         return {"status": "approved", "id": identity}
 
 

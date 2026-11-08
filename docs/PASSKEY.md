@@ -38,14 +38,25 @@ time window. An assertion for one approval does not fit any other approval.
 From then on:
 
 1. Review the change. The dialog shows the exact content and its SHA-256.
-2. Approve. The app signs the approval and shows its digest in the same
-   dialog. The dialog stays open while your device asks for the passkey.
-3. Confirm with the passkey. The app checks the assertion and stores the
-   request with it. Only then is the action approved.
+2. Approve. The Rust approval gate signs the approval of the stored
+   proposal, but only if the proposal still has the review binding that the
+   dialog showed. The gate keeps the signed approval as pending. A pending
+   approval cannot be executed. The dialog shows the approval digest and
+   stays open while your device asks for the passkey.
+3. Confirm with the passkey. The gate verifies the assertion against the
+   pending approval's digest. Then it stores the request with the assertion
+   as approved. Only then is the action approved.
 4. Execute as before.
 
-The terminal approval command (`witness_workflow.py approve`) refuses once a
-passkey is installed. Approve in the owner app.
+A pending approval is used once. It expires with the approval window (5
+minutes). A failed assertion changes nothing; review again or retry before
+expiry. The gate also pins the passkey: once it has seen a trust with a
+passkey, it refuses a trust without that passkey. It also compares the trust
+with the passkey that the local receiver state pinned.
+
+The terminal approval command (`witness_workflow.py approve`) uses the gate
+command `gate-approve-terminal`, which refuses when the trust has a passkey.
+Approve in the owner app.
 
 ## Trust and request fields
 
@@ -124,6 +135,11 @@ verifier applies the same rule across the trusts in an archive.
 
 - Rust: `crates/openproof-witness/src/passkey.rs` (software P-256 keys).
 - Go: `reference/go-witness/passkey_test.go`.
+- Approval gate: `crates/openproof-witness/src/gate_tests.rs` (pending
+  approval not executable, assertion for another digest, replay, expiry,
+  passkey pin).
+- Rust and Go agreement: the `passkey-*` cases in
+  `scripts/witness_conformance.py`.
 - Python owner-app routes: `scripts/tests/test_passkey.py`.
 - Browser: `scripts/passkey_smoke.mjs` with the Chrome DevTools virtual
   authenticator.

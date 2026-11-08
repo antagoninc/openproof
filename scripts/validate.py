@@ -77,8 +77,37 @@ run(
         "warnings",
     ],
 )
+# Rotation and storage are behind the off-by-default `experimental` feature.
+EXPERIMENTAL = ["--features", "openproof-witness/experimental"]
+run(
+    "clippy-experimental",
+    ["cargo", "clippy", "--workspace", "--all-targets", "--locked", *EXPERIMENTAL]
+    + ["--", "-D", "warnings"],
+)
 run("tests", ["cargo", "test", "--workspace", "--locked"])
+run("tests-experimental", ["cargo", "test", "--workspace", "--locked", *EXPERIMENTAL])
 run("debug-build", ["cargo", "build", "--workspace", "--locked"])
+
+
+def check_default_build(name, binary):
+    """The default witness binary must not contain the experimental commands."""
+    code = (
+        "import subprocess, sys\n"
+        "for c in ['sign-rotation', 'rotate-state', 'storage-authorize']:\n"
+        "    r = subprocess.run([sys.argv[1], c, 'x', 'y'], capture_output=True, text=True)\n"
+        "    assert r.returncode and 'usage:' in r.stderr and c not in r.stderr, c\n"
+        "print('PASS: no experimental commands in', sys.argv[1])\n"
+    )
+    run(name, [sys.executable, "-c", code, binary])
+
+
+check_default_build(
+    "default-excludes-experimental", ROOT / "target/debug/openproof-witness"
+)
+run(
+    "fuzz-check",
+    ["cargo", "check", "--manifest-path", "fuzz/Cargo.toml", "--locked", "--bins"],
+)
 goenv = dict(
     os.environ,
     GOMODCACHE=str(ROOT / "outputs/tooling/go-mod"),
@@ -114,6 +143,11 @@ run("doctor", ["target/debug/openproof", "doctor"])
 run(
     "assurance-demo",
     ["target/debug/openproof", "assurance-demo", out / "assurance-demo"],
+)
+# The Python suite also covers rotation and storage, so it needs the experimental build.
+run(
+    "debug-build-experimental",
+    ["cargo", "build", "--workspace", "--locked", *EXPERIMENTAL],
 )
 run(
     "python-agent-tests",
@@ -184,6 +218,9 @@ if not args.skip_audit:
     assert not report["vulnerabilities"]["found"]
     (out / "rustsec.json").write_text(json.dumps(report, indent=2) + "\n")
 run("release", ["cargo", "build", "--workspace", "--release", "--locked"])
+check_default_build(
+    "release-excludes-experimental", ROOT / "target/release/openproof-witness"
+)
 shutil.copyfile(ROOT / "target/release/openproof-witness", out / "openproof-witness")
 (out / "openproof-witness").chmod(0o755)
 assert source == snapshot(), "Source changed during validation; provenance not emitted"
@@ -254,9 +291,12 @@ count = sum(
         re.findall(r"test result: ok\. (\d+) passed", (out / "tests.log").read_text()),
     )
 )
+differential = re.search(
+    r"PASS (\d+) Go/Rust", (out / "witness-conformance.log").read_text()
+).group(1)
 (out / "SUMMARY.md").write_text(f"""# Validation results
 
-{count} Rust tests passed. Formatting, Clippy, schema checks, 224 evidence, 94 trust and 202 Go/Rust witness differential cases, the separate-process agent pilot, declared-license policy, and release build passed.
+{count} Rust tests passed. Formatting, Clippy, schema checks, 224 evidence, 94 trust and {differential} Go/Rust witness differential cases (including owner passkey assertions), the separate-process agent pilot, declared-license policy, and release build passed.
 
 RustSec audit: {'SKIPPED explicitly' if args.skip_audit else 'passed; database revision recorded in rustsec.json'}.
 Platform: {platform.platform()}.

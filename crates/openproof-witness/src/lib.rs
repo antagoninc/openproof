@@ -10,12 +10,19 @@ use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
+// Experimental: not in the default build. See docs/TCB.md.
+#[cfg(feature = "experimental")]
 mod storage;
+#[cfg(feature = "experimental")]
 pub use storage::*;
 mod clock_recovery;
 pub use clock_recovery::*;
+#[cfg(feature = "experimental")]
 mod rotation;
+#[cfg(feature = "experimental")]
 pub use rotation::*;
+mod gate;
+pub use gate::*;
 mod pages;
 pub use pages::*;
 mod verifier;

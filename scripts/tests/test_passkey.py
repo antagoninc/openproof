@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from owner_app import Owner, Server, b64encode, b64decode, approval_digest
+from owner_app import Owner, Server, b64encode, b64decode
 from witness_workflow import initialize, call, ref, renew
 from paged_workflow import enable
 from portable_history import export_history
@@ -16,6 +16,12 @@ ORIGIN = "http://localhost:8765"
 GO = os.environ.get(
     "OPENPROOF_GO_VERIFY", str(ROOT / "outputs/v0.9/openproof-go-verify")
 )
+
+
+def approval_digest(request):
+    payload = request["approval"]["payload"]
+    preimage = b"OpenProof/v1/document-approval/1\0" + ref.canonical(payload)
+    return hashlib.sha256(preimage).hexdigest()
 
 
 class SoftAuthenticator:
@@ -80,6 +86,21 @@ class PasskeyTests(unittest.TestCase):
         identity = self.o.broker.propose("report", version, content)["proposal_id"]
         review = self.o.review(identity)
         return identity, self.o.approve(identity, review["review_token"])
+
+    def gate_state(self, identity):
+        return call(["gate-approved", self.h, self.h / "trust.json", identity])["state"]
+
+    def receive(self, request):
+        h = self.h
+        return call(
+            [
+                "receive",
+                h / "receiver/state",
+                h / "receiver/key.secret",
+                h / "trust.json",
+            ],
+            request,
+        )
 
     def go_verify(self):
         archive = Path(self.temp.name) / ("archive-" + str(time.time_ns()))
@@ -176,14 +197,15 @@ class PasskeyTests(unittest.TestCase):
         identity, challenge = self.approve()
         self.assertEqual(challenge["status"], "passkey_required")
         self.assertEqual(challenge["credential_id"], b64encode(b"credential-1"))
-        self.assertTrue(self.o.broker.file("proposals", identity).exists())
-        self.assertFalse(self.o.broker.file("approved", identity).exists())
+        self.assertEqual(self.gate_state(identity), "awaiting_passkey")
+        with self.assertRaises(FileNotFoundError):
+            self.o.broker.commit(identity)
         assertion = self.device.assert_(challenge["challenge"])
         result = self.o.approve_passkey(
             identity, challenge["assertion_token"], assertion
         )
         self.assertEqual(result, {"status": "approved", "id": identity})
-        stored = ref.read(self.o.broker.file("approved", identity))
+        stored = self.o.broker.request(identity)
         self.assertEqual(stored["owner_assertion"], assertion)
         self.assertEqual(
             b64encode(bytes.fromhex(approval_digest(stored))), challenge["challenge"]
@@ -238,27 +260,33 @@ class PasskeyTests(unittest.TestCase):
             self.o.assertions[token] = dict(pending, time=time.monotonic())
             with self.assertRaises((ValueError, RuntimeError)):
                 self.o.approve_passkey(identity, token, assertion)
-            self.assertFalse(self.o.broker.file("approved", identity).exists())
+            self.assertEqual(self.gate_state(identity), "awaiting_passkey")
         # A process that can read the authority key signs a request without a passkey.
-        proposal = ref.read(self.o.broker.file("proposals", identity))
+        proposal = self.o.broker.review(identity)["proposal"]
         forged = call(
             ["approve", self.h / "authority/key.secret", self.h / "trust.json"],
             proposal,
         )
-        ref_path = self.o.broker.file("approved", identity)
-        ref_path.write_text(json.dumps(forged))
-        result = self.o.broker.commit(identity)
-        self.assertEqual(result["execution_status"], "not_committed", result)
-        self.assertEqual(result["error_code"], "admission_failed")
+        # A file in the earlier approved/ folder is not read by the gate.
+        (self.h / "approved").mkdir(mode=0o700)
+        (self.h / "approved" / (identity + ".json")).write_text(json.dumps(forged))
+        with self.assertRaises(FileNotFoundError):
+            self.o.broker.commit(identity)
+        # The receiver refuses the forged request without an assertion.
+        with self.assertRaisesRegex(RuntimeError, "required"):
+            self.receive(forged)
         # An assertion copied from a different approval does not match this digest.
         other, other_challenge = self.approve("other text", 0)
         copied = dict(
             forged, owner_assertion=self.device.assert_(other_challenge["challenge"])
         )
-        ref_path.write_text(json.dumps(copied))
-        self.assertEqual(
-            self.o.broker.commit(identity)["execution_status"], "not_committed"
-        )
+        with self.assertRaisesRegex(RuntimeError, "challenge"):
+            self.receive(copied)
+        self.o.assertions[token] = dict(pending, time=time.monotonic())
+        with self.assertRaisesRegex(RuntimeError, "challenge"):
+            self.o.approve_passkey(
+                identity, token, self.device.assert_(other_challenge["challenge"])
+            )
         self.assertEqual(call(["head", self.h / "receiver/state"])["count"], 0)
         with self.assertRaises(RuntimeError):
             # The terminal approval path refuses once a passkey is installed.
@@ -268,17 +296,14 @@ class PasskeyTests(unittest.TestCase):
     def test_without_passkey_flow_is_unchanged_and_assertion_rejected(self):
         identity, result = self.approve()
         self.assertEqual(result, {"status": "approved", "id": identity})
-        stored = ref.read(self.o.broker.file("approved", identity))
+        stored = self.o.broker.request(identity)
         self.assertNotIn("owner_assertion", stored)
         challenge = b64encode(bytes.fromhex(approval_digest(stored)))
         with_assertion = dict(stored, owner_assertion=self.device.assert_(challenge))
         with self.assertRaises(RuntimeError):
             call(["check-assertion", self.h / "trust.json"], with_assertion)
-        self.o.broker.file("approved", identity).write_text(json.dumps(with_assertion))
-        self.assertEqual(
-            self.o.broker.commit(identity)["execution_status"], "not_committed"
-        )
-        self.o.broker.file("approved", identity).write_text(json.dumps(stored))
+        with self.assertRaisesRegex(RuntimeError, "unexpected"):
+            self.receive(with_assertion)
         self.assertEqual(self.o.broker.commit(identity)["document_version"], 1)
 
     def test_history_before_enrollment_still_verifies(self):

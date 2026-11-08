@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Owner CLI and narrowly scoped document broker. Agent tools cannot approve or select keys/paths."""
+"""Owner CLI and narrowly scoped document broker. Agent tools cannot approve or select keys/paths.
+Proposals and approvals live in the Rust approval gate (gate-* commands); this module relays.
+"""
 
 import argparse, hashlib, json, os, re, subprocess, sys, time, uuid, fcntl
 from contextlib import contextmanager
@@ -63,8 +65,6 @@ def initialize(home):
         keys[role] = call(["keygen", folder / "key.secret"])["public_key"]
         if role != "authority":
             call(["init", folder / "state"])
-    (home / "proposals").mkdir(mode=0o700)
-    (home / "approved").mkdir(mode=0o700)
     (home / "evidence").mkdir(mode=0o700)
     (home / "root").mkdir(mode=0o700)
     root = call(["keygen", home / "root/key.secret"])["public_key"]
@@ -121,66 +121,63 @@ def serialized(method):
     return run
 
 
+def checked(identity):
+    if not isinstance(identity, str) or not re.fullmatch("[0-9a-f]{64}", identity):
+        raise ValueError("invalid proposal id")
+    return identity
+
+
+def gate_list(home):
+    """Proposals, passkey-pending and approved entries in the gate (no content)."""
+    return call(["gate-list", Path(home)])
+
+
+def approved_request(home, identity):
+    """The gate's approved request, checked by the gate when read."""
+    home = Path(home)
+    r = call(["gate-approved", home, home / "trust.json", checked(identity)])
+    if r["state"] != "approved":
+        raise FileNotFoundError("proposal is not approved")
+    return r["request"]
+
+
 class Broker:
     def __init__(self, home):
         self.home = Path(home).resolve()
         if self.home.stat().st_mode & 0o077:
             raise ValueError("broker directory must be private")
 
-    def file(self, folder, identity):
-        if not isinstance(identity, str) or not re.fullmatch("[0-9a-f]{64}", identity):
-            raise ValueError("invalid proposal id")
-        p = self.home / folder / (identity + ".json")
-        if p.is_symlink():
-            raise ValueError("symlinked broker input")
-        return p
-
     @serialized
     def propose(self, document, expected_version, content):
         require_admission(self.home)
-        if not isinstance(document, str) or not re.fullmatch(
-            "[a-zA-Z0-9_-]{1,80}", document
-        ):
-            raise ValueError("invalid document id")
-        if type(expected_version) != int or not 0 <= expected_version < 2**63 - 1:
-            raise ValueError("invalid version")
-        if not isinstance(content, str) or not 0 < len(content.encode()) <= 8192:
-            raise ValueError("content must be 1..8192 UTF-8 bytes")
-        # Only unsigned pending proposals are reclaimable. Approved requests/evidence
-        # are never evicted. Owner review captures its own immutable in-memory snapshot.
-        pending = sorted(
-            (self.home / "proposals").glob("*.json"),
-            key=lambda p: (p.stat().st_mtime_ns, p.name),
-        )
-        for old in pending:
-            if time.time() - old.stat().st_mtime > 86400:
-                old.unlink()
-        pending = [p for p in pending if p.exists()]
-        for old in pending[: max(0, len(pending) - 999)]:
-            old.unlink()
-        p = dict(document=document, expected_version=expected_version, content=content)
-        identity = hashlib.sha256(
-            uuid.uuid4().bytes + json.dumps(p).encode()
-        ).hexdigest()
-        save(self.file("proposals", identity), p)
-        return {
-            "proposal_id": identity,
-            "state": "awaiting_owner_approval",
-            "content_sha256": hashlib.sha256(content.encode()).hexdigest(),
-        }
+        value = dict(document=document, expected_version=expected_version)
+        try:
+            return call(["gate-propose", self.home], dict(value, content=content))
+        except RuntimeError as e:
+            raise ValueError(str(e)) from None
+
+    def review(self, identity):
+        """The exact proposal, its content SHA-256 and its review binding."""
+        with home_lock(self.home):
+            require_admission(self.home)
+            return call(["gate-review", self.home, checked(identity)])
+
+    def request(self, identity):
+        return approved_request(self.home, identity)
 
     def approve(self, identity, *, reader=None):
         # Capture exactly what is reviewed, then release the global lock during input.
-        # Eviction of the pending file cannot change this captured proposal.
-        with home_lock(self.home):
-            require_admission(self.home)
-            p = ref.read(self.file("proposals", identity))
-        digest = hashlib.sha256(p["content"].encode()).hexdigest()
+        # The gate signs only if the stored proposal still has this review binding.
+        r = self.review(identity)
+        digest = r["content_sha256"]
         if reader is None:
             if not sys.stdin.isatty():
                 raise RuntimeError("owner approval requires interactive terminal")
             reader = input
-        print("DOCUMENT UPDATE REVIEW\n" + json.dumps(p, ensure_ascii=True, indent=2))
+        print(
+            "DOCUMENT UPDATE REVIEW\n"
+            + json.dumps(r["proposal"], ensure_ascii=True, indent=2)
+        )
         print(
             "Receiver-owned document database; no caller-selected filesystem path. SHA-256: "
             + digest
@@ -189,30 +186,26 @@ class Broker:
             raise RuntimeError("approval declined")
         with home_lock(self.home):
             require_admission(self.home)
-            if "owner_passkey" in ref.read(self.home / "trust.json"):
-                raise RuntimeError("owner passkey required; approve in the owner app")
-            if len(list((self.home / "approved").glob("*.json"))) >= 1000:
-                raise RuntimeError("approved request capacity; owner archival required")
+            # Refused when the trust has an owner passkey: approve in the owner app.
             q = call(
                 [
-                    "approve",
-                    self.home / "authority/key.secret",
+                    "gate-approve-terminal",
+                    self.home,
                     self.home / "trust.json",
-                ],
-                p,
+                    identity,
+                    r["review_sha256"],
+                ]
             )
-            save(self.file("approved", identity), q)
-            self.file("proposals", identity).unlink(missing_ok=True)
         return {
             "proposal_id": identity,
             "state": "approved",
-            "expires_at": q["approval"]["payload"]["expires_at"],
+            "expires_at": q["expires_at"],
         }
 
     @serialized
     def commit(self, identity, *, recover_only=False):
         require_admission(self.home)
-        q = ref.read(self.file("approved", identity))
+        q = self.request(identity)
         h = self.home
         if not (h / "trust-signed.json").exists() or not (h / "verifier").is_dir():
             raise RuntimeError("owner must run upgrade-trust before dispatch")

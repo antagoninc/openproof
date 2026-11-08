@@ -3,7 +3,7 @@
 
 import argparse, datetime, html, json
 from pathlib import Path
-from witness_workflow import call, ref
+from witness_workflow import call, ref, gate_list, approved_request
 
 
 def render(home, out):
@@ -20,13 +20,13 @@ def render(home, out):
             "Needs attention",
         ]
     }
-    for file in sorted((home / "approved").glob("*.json")):
+    for entry in gate_list(home)["approved"]:
         receipt = None
         status = "Approved"
         detail = "No receipt observed"
         fresh = "Not checked"
         try:
-            request = ref.read(file)
+            request = approved_request(home, entry["id"])
             receipt = call(["recover", home / "receiver/state"], request)
             if receipt:
                 status = "Committed"
@@ -39,7 +39,7 @@ def render(home, out):
         evidence = []
         for record in (home / "evidence").glob("*/assessment.json"):
             try:
-                if ref.read(record).get("proposal_id") == file.stem:
+                if ref.read(record).get("proposal_id") == entry["id"]:
                     evidence.append(record.parent)
             except Exception:
                 pass
@@ -71,7 +71,7 @@ def render(home, out):
         counts[status] += 1
         rows.append(
             "<tr><td><code>"
-            + e(file.stem[:16])
+            + e(entry["id"][:16])
             + "</code></td><td>"
             + e(status)
             + "</td><td>"

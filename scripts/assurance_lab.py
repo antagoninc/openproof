@@ -39,7 +39,7 @@ def run(out, binary):
     owner.approve(
         p, review["review_token"]
     )  # Explicitly simulated, never human consent.
-    q = ref.read(home / "approved" / (p + ".json"))
+    q = owner.broker.request(p)
     for name, change in [
         ("Changed content", lambda x: x.update(content="Substituted content")),
         (

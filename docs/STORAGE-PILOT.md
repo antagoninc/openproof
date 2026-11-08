@@ -26,8 +26,10 @@ Observations use a separate signature domain and a distinct adapter key:
 
 ## Try the local fixture
 
+The storage commands are experimental and are not in the default build.
+
 ```sh
-cargo build --workspace --locked
+cargo build --workspace --locked --features openproof-witness/experimental
 outputs/local-venv/bin/python -m pip install -r scripts/requirements.txt
 outputs/local-venv/bin/python scripts/storage_demo.py --out outputs/NEW_STORAGE_DEMO
 ```

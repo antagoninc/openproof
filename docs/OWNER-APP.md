@@ -17,13 +17,17 @@ The app listens only on `127.0.0.1`, on an automatically selected port or the on
 
 1. Enter the exact document content and expected current version. Creating a proposal grants no permission.
 2. Review the document, version, full content and content digest. The review token expires after five minutes and can be used only once. Changing any proposal field invalidates it.
-3. Approve, then separately choose execution. The receiver checks the signed content/version/nonce binding and commits its own document database and receipt atomically.
+3. Approve, then separately choose execution. The Rust approval gate makes the approval decision. It signs only the stored proposal with the review binding that you saw. With a passkey, it stores the approval only after it verifies your passkey assertion ([PASSKEY.md](PASSKEY.md)). The receiver checks the signed content/version/nonce binding and commits its own document database and receipt atomically.
 4. Use **Recover / refresh** on the same action after an interruption. Durable recovery precedes new dispatch. A committed update with unavailable evidence is not reported as fully verified.
 5. An expired, uncommitted approval can be proposed for fresh review. The app first checks for a durable receipt; it never automatically grants new authorization. Exact expected-version binding still prevents two updates if the original commits concurrently.
 
 The activity list displays recorded local assessments and marks old checkpoints as needing refresh. Opening the list does not independently reverify every historical signature. Committed and checked counters overlap because they describe stages of the same action. A signature is not proof of model truth, physical-world effects or operator independence.
 
 The UI's writes require its owner session, same-origin request, correct Host and an anti-CSRF header. Reports are rendered as text, never executable HTML. The browser session remains a high-trust owner capability. Other processes with the same account/Docker administration are outside this isolation boundary. Do not expose the owner app through a reverse proxy or tunnel.
+
+## Where proposals and approvals are kept
+
+The approval gate keeps proposals, passkey-pending approvals and approved requests in `HOME/authority/gate/gate.db` (SQLite, private directory and file, no links). Earlier homes kept them as JSON files in `HOME/proposals/` and `HOME/approved/`. The gate imports those files once, when it first opens the home. After that it does not read those folders, and a file added there has no effect. The import leaves the files in place. The gate checks every approved request again when it reads it: a valid signature from a known authority, the exact content, the proposal that its id commits to, and a valid passkey assertion if it carries one.
 
 ## Incremental evidence and archival
 
@@ -39,6 +43,8 @@ outputs/v0.9/openproof-go-verify verify-archive \
 For a live check use the actual current Unix time. The final checkpoint must be within five minutes. Historical epochs are checked at their signed checkpoint times, with monotonic epoch/configuration rules, preserved nonces/document versions, current issuer eligibility, six-party transition signatures and root continuity. The final independently provided checkpoint must match exactly. The Go verifier does not call Rust. It reconstructs the archive in memory; it is not a second persistent database verifier and cannot detect rollback if the caller also supplies an old checkpoint and invented time.
 
 ## Planned local key change
+
+This feature is experimental. It needs a witness binary built with `cargo build --workspace --locked --features openproof-witness/experimental`.
 
 The app can prepare and resume a **same-owner** root/receiver/witness change. Resolve all approved requests first. Preparation catches up the witness/verifier and retains an exact cutover, old/new keys and signed records in a private job directory. Admission is paused before any role state changes. Each local database transition is transactional. The controller reconciles the exact recorded handover after an interruption, publishes files while paused, and resumes admission only after all roles/configurations are complete.
 

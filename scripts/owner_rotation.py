@@ -3,7 +3,15 @@
 
 import argparse, hashlib, json, os, shutil, time, uuid
 from pathlib import Path
-from witness_workflow import call, save, ref, home_lock, require_admission
+from witness_workflow import (
+    call,
+    save,
+    ref,
+    home_lock,
+    require_admission,
+    gate_list,
+    approved_request,
+)
 from paged_workflow import finish_paged, replace_json
 
 
@@ -35,8 +43,9 @@ def prepare(home):
         if not (h / "paging.json").exists():
             raise ValueError("Enable paging first")
         # Do not invalidate still-pending approvals through a receiver-key transition.
-        for f in (h / "approved").glob("*.json"):
-            if call(["recover", h / "receiver/state"], ref.read(f)) is None:
+        for entry in gate_list(h)["approved"]:
+            q = approved_request(h, entry["id"])
+            if call(["recover", h / "receiver/state"], q) is None:
                 raise ValueError("Resolve every approved action before key handover")
         old = ref.read(h / "trust-signed.json")
         root = ref.read(h / "root-public.json")["public_key"]

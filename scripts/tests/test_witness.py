@@ -93,7 +93,7 @@ class Workflow(unittest.TestCase):
         p = self.b.propose("test", 0, "hello")
         identity = p["proposal_id"]
         self.b.approve(identity, reader=lambda _: "APPROVE " + p["content_sha256"][:12])
-        q = json.loads(self.b.file("approved", identity).read_text())
+        q = self.b.request(identity)
         call(
             [
                 "receive",

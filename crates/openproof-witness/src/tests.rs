@@ -757,6 +757,7 @@ fn pages_cross_legacy_limit_and_reject_order_tamper_replay() {
             .checkpoint_complete
     );
 }
+#[cfg(feature = "experimental")]
 #[test]
 fn planned_rotation_keeps_history_nonces_and_retires_old_root() {
     let s = setup();

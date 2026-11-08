@@ -3,7 +3,7 @@ use ed25519_dalek::SigningKey;
 use openproof_core::{parse, sign};
 use openproof_witness::*;
 use rand_core::{OsRng, RngCore};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
     fs,
     io::{Read, Write},
@@ -24,7 +24,7 @@ fn input<T: serde::de::DeserializeOwned + Serialize>() -> Result<T> {
     Ok(parse(&b)?)
 }
 #[cfg(unix)]
-fn key(path: &str) -> Result<SigningKey> {
+fn key(path: impl AsRef<Path>) -> Result<SigningKey> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let f = fs::OpenOptions::new()
         .read(true)
@@ -45,18 +45,11 @@ fn key(path: &str) -> Result<SigningKey> {
     Ok(SigningKey::from_bytes(&seed))
 }
 #[cfg(not(unix))]
-fn key(_: &str) -> Result<SigningKey> {
+fn key(_: impl AsRef<Path>) -> Result<SigningKey> {
     Err("Unix key storage required".into())
 }
 fn trust(path: &str) -> Result<Trust> {
     Ok(parse(&read(path)?)?)
-}
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Proposal {
-    document: String,
-    expected_version: u64,
-    content: String,
 }
 /// Usage text: one command per line.
 const USAGE: &str = concat!(
@@ -64,6 +57,13 @@ const USAGE: &str = concat!(
     "  keygen FILE\n",
     "  init DIR\n",
     "  approve KEY TRUST < PROPOSAL\n",
+    "  gate-propose HOME < PROPOSAL\n",
+    "  gate-review HOME PROPOSAL_ID\n",
+    "  gate-approve HOME TRUST PROPOSAL_ID REVIEW_SHA256\n",
+    "  gate-approve-terminal HOME TRUST PROPOSAL_ID REVIEW_SHA256\n",
+    "  gate-approve-passkey HOME TRUST PROPOSAL_ID APPROVAL_SHA256 < ASSERTION\n",
+    "  gate-approved HOME TRUST PROPOSAL_ID\n",
+    "  gate-list HOME\n",
     "  receive DIR KEY TRUST < REQUEST\n",
     "  check-assertion TRUST < REQUEST\n",
     "  witness DIR KEY TRUST < RECEIPT\n",
@@ -101,39 +101,26 @@ const USAGE: &str = concat!(
     "  verify-page DIR SIGNED_TRUST PIN < PAGE\n",
     "  page-progress DIR\n",
     "  reset-pages DIR\n",
-    "  sign-rotation KEY < ROTATION\n",
-    "  check-rotation ROOT OLD_SIGNED_TRUST < HANDOVER\n",
-    "  rotate-state DIR OLD_SIGNED_TRUST < HANDOVER\n",
     "  document DIR ID\n",
 );
+// Planned key handover and the storage pilot: only with `--features experimental`.
+#[cfg(feature = "experimental")]
+mod cli_experimental;
+#[cfg(feature = "experimental")]
+use cli_experimental::{experimental, EXPERIMENTAL_USAGE};
+#[cfg(not(feature = "experimental"))]
+const EXPERIMENTAL_USAGE: &str = "";
+#[cfg(not(feature = "experimental"))]
+fn experimental(_: &[&str]) -> Result<Option<serde_json::Value>> {
+    Ok(None)
+}
 fn run() -> Result<serde_json::Value> {
     let a = std::env::args().skip(1).collect::<Vec<_>>();
     let a = a.iter().map(String::as_str).collect::<Vec<_>>();
+    if let Some(v) = experimental(&a)? {
+        return Ok(v);
+    }
     Ok(match a.as_slice() {
-        ["storage-authorize", secret] => {
-            serde_json::to_value(authorize_upload(input()?, &key(secret)?)?)?
-        }
-        ["storage-check", authority] => {
-            let s: openproof_core::Signed<UploadAuthorization> = input()?;
-            serde_json::json!({"authorization_sha256":check_upload(&s,authority,now())?})
-        }
-        ["storage-check-history", authority] => {
-            let s: openproof_core::Signed<UploadAuthorization> = input()?;
-            serde_json::json!({"authorization_sha256":check_upload(&s,authority,s.payload.not_before)?,"dispatch_allowed":false})
-        }
-        ["storage-observe", secret] => {
-            let p: StorageObservation = input()?;
-            let k = key(secret)?;
-            if p.adapter != hex::encode(k.verifying_key().to_bytes()) {
-                return Err("wrong adapter".into());
-            }
-            serde_json::to_value(sign(p, &k)?)?
-        }
-        ["storage-verify", authority, adapter] => {
-            let e: StorageEvidence = input()?;
-            verify_storage_evidence(&e, authority, adapter, now())?;
-            serde_json::json!({"status":"adapter_statement_verified","kind":e.observation.payload.kind,"independent_storage_proof":false})
-        }
         ["init", state] => {
             init(Path::new(state))?;
             serde_json::json!({"initialized":true})
@@ -161,34 +148,35 @@ fn run() -> Result<serde_json::Value> {
         ["approve", secret, configuration] => {
             let t = trust(configuration)?;
             t.validate(now())?;
-            let k = key(secret)?;
-            if hex::encode(k.verifying_key().to_bytes()) != t.authority {
-                return Err("wrong authority".into());
-            }
-            let p: Proposal = input()?;
-            if p.content.is_empty() || p.content.len() > 8192 {
-                return Err("content bound".into());
-            }
-            let mut nonce = [0; 32];
-            OsRng.fill_bytes(&mut nonce);
-            let time = now();
-            let a = Approval {
-                version: V.into(),
-                authority: t.authority.clone(),
-                document: p.document,
-                expected_version: p.expected_version,
-                content_sha256: hash(p.content.as_bytes()),
-                nonce: hex::encode(nonce),
-                receiver: t.receiver,
-                not_before: time,
-                expires_at: time + 300,
-            };
-            serde_json::to_value(Request {
-                approval: sign(a, &k)?,
-                content: p.content,
-                owner_assertion: None,
-            })?
+            serde_json::to_value(sign_approval(&input()?, &t, &key(secret)?, now())?)?
         }
+        ["gate-propose", home] => gate_propose(Path::new(home), &input()?, now())?,
+        ["gate-review", home, id] => gate_review(Path::new(home), id, now())?,
+        [command @ ("gate-approve" | "gate-approve-terminal"), home, configuration, id, reviewed] =>
+        {
+            let home = Path::new(home);
+            gate_approve(
+                home,
+                &trust(configuration)?,
+                &key(home.join("authority/key.secret"))?,
+                id,
+                reviewed,
+                *command == "gate-approve-terminal",
+                now(),
+            )?
+        }
+        ["gate-approve-passkey", home, configuration, id, approval] => gate_approve_passkey(
+            Path::new(home),
+            &trust(configuration)?,
+            id,
+            approval,
+            &input()?,
+            now(),
+        )?,
+        ["gate-approved", home, configuration, id] => {
+            gate_approved(Path::new(home), &trust(configuration)?, id, now())?
+        }
+        ["gate-list", home] => gate_list(Path::new(home), now())?,
         ["receive", state, secret, configuration] => serde_json::to_value(apply(
             Path::new(state),
             &input()?,
@@ -314,25 +302,6 @@ fn run() -> Result<serde_json::Value> {
             &key(secret)?,
             now(),
         )?)?,
-        ["check-rotation", root, old_trust] => {
-            validate_handover(&parse(&read(old_trust)?)?, root, &input()?, now())?;
-            serde_json::json!({"valid_planned_handover":true})
-        }
-        ["sign-rotation", secret] => {
-            serde_json::to_value(sign(input::<Rotation>()?, &key(secret)?)?)?
-        }
-        ["rotation-applied", state] => {
-            serde_json::json!({"applied":rotation_applied(Path::new(state),&input()?)?})
-        }
-        ["rotate-state", state, old_trust] => {
-            rotate_state(
-                Path::new(state),
-                &parse(&read(old_trust)?)?,
-                &input()?,
-                now(),
-            )?;
-            serde_json::json!({"rotated":true})
-        }
         ["enable-pages", state, configuration] => {
             enable_pages(Path::new(state), &trust(configuration)?, now())?;
             serde_json::json!({"enabled":true})
@@ -408,7 +377,7 @@ fn run() -> Result<serde_json::Value> {
             let (v, c) = document(Path::new(state), id)?;
             serde_json::json!({"version":v,"content":c})
         }
-        _ => return Err(USAGE.into()),
+        _ => return Err(format!("{USAGE}{EXPERIMENTAL_USAGE}").into()),
     })
 }
 fn main() {

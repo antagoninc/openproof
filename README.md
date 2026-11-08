@@ -99,7 +99,7 @@ The Go verifier is separately implemented without calling Rust, but it shares pr
 
 ## Validation
 
-The recorded v0.9 local milestone passed (the current branch adds passkey approvals; its local run on 8 Nov 2026 passed 134 Rust tests, the Go tests, 82 Python tests and both browser workflows on Linux):
+The recorded v0.9 local milestone passed (the current branch adds passkey approvals; its local run on 8 Nov 2026 passed 141 Rust tests (145 with experimental features), the Go tests, 218 Go/Rust cross-implementation cases, 83 Python tests and both browser workflows on Linux):
 
 | Check | Recorded result |
 |---|---|

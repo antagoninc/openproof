@@ -12,7 +12,8 @@ openproof-core = { path = "../crates/openproof-core" }
 openproof-runtime = { path = "../crates/openproof-runtime" }
 serde_json = "1"
 openproof-trust = { path = "../crates/openproof-trust" }
-openproof-witness = { path = "../crates/openproof-witness" }
+# The witness target also parses the experimental handover types.
+openproof-witness = { path = "../crates/openproof-witness", features = ["experimental"] }
 [workspace]
 members = ["."]
 [[bin]]

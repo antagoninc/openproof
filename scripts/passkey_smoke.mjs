@@ -57,12 +57,21 @@ function run(command, args, input) {
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
-function writeApproved(id, request) {
-  fs.writeFileSync(
-    path.join(home, "approved", id + ".json"),
-    JSON.stringify(request),
-    { mode: 0o600 },
-  );
+function gate(...args) {
+  return JSON.parse(run(witnessBinary, args));
+}
+// The receiver's own admission check, run directly. Returns the exit status.
+function receive(request) {
+  return spawnSync(
+    witnessBinary,
+    [
+      "receive",
+      path.join(home, "receiver/state"),
+      path.join(home, "receiver/key.secret"),
+      path.join(home, "trust.json"),
+    ],
+    { input: JSON.stringify(request), encoding: "utf8" },
+  ).status;
 }
 const port = await freePort();
 let app = startApp("app", ["--port", String(port)]);
@@ -275,7 +284,12 @@ try {
     prompt.userVerification !== "required"
   )
     throw Error("Review screen did not show the exact content at the prompt");
-  const approved = readJson(path.join(home, "approved", approvedId + ".json"));
+  const approved = gate(
+    "gate-approved",
+    home,
+    path.join(home, "trust.json"),
+    approvedId,
+  ).request;
   if (!approved.owner_assertion) throw Error("Stored request lacks assertion");
   const clientData = JSON.parse(
     Buffer.from(approved.owner_assertion.client_data_json, "base64url"),
@@ -298,7 +312,7 @@ try {
       "api('propose',{document:'passkey-fixture',expected_version:1,content:'forged without passkey'})",
     )
   ).proposal_id;
-  const proposal = readJson(path.join(home, "proposals", forgedId + ".json"));
+  const proposal = gate("gate-review", home, forgedId).proposal;
   const forged = JSON.parse(
     run(
       witnessBinary,
@@ -310,26 +324,34 @@ try {
       JSON.stringify(proposal),
     ),
   );
-  writeApproved(forgedId, forged);
-  const withoutAssertion = await evaluate(
-    `api('commit',{id:${JSON.stringify(forgedId)}})`,
+  // A request file in the earlier approved/ folder is not read by the gate.
+  const legacy = path.join(home, "approved");
+  fs.mkdirSync(legacy, { mode: 0o700 });
+  fs.writeFileSync(
+    path.join(legacy, forgedId + ".json"),
+    JSON.stringify(forged),
+    {
+      mode: 0o600,
+    },
   );
-  writeApproved(forgedId, {
+  const forgedCommit = await evaluate(
+    `api('commit',{id:${JSON.stringify(forgedId)}}).then(() => 'executed', () => 'refused')`,
+  );
+  // The receiver refuses it without an assertion and with a copied one.
+  const withoutAssertion = receive(forged);
+  const copiedAssertion = receive({
     ...forged,
     owner_assertion: approved.owner_assertion,
   });
-  const copiedAssertion = await evaluate(
-    `api('commit',{id:${JSON.stringify(forgedId)}})`,
-  );
   const recovery = await evaluate("api('recovery')");
   if (
-    withoutAssertion.execution_status !== "not_committed" ||
-    copiedAssertion.execution_status !== "not_committed" ||
+    forgedCommit !== "refused" ||
+    withoutAssertion === 0 ||
+    copiedAssertion === 0 ||
     recovery.heads.receiver !== 1
   )
     throw Error("Request without a valid assertion was executed");
-  fs.unlinkSync(path.join(home, "approved", forgedId + ".json"));
-  fs.unlinkSync(path.join(home, "proposals", forgedId + ".json"));
+  fs.rmSync(legacy, { recursive: true });
 
   // 5. Export the history and verify it offline with the Go verifier.
   let go = process.env.OPENPROOF_GO_VERIFY;

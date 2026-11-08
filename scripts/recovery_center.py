@@ -3,7 +3,14 @@
 
 import argparse, json, time, re
 from pathlib import Path
-from witness_workflow import call, ref, home_lock, require_admission
+from witness_workflow import (
+    call,
+    ref,
+    home_lock,
+    require_admission,
+    gate_list,
+    approved_request,
+)
 
 
 def rotation_status(home):
@@ -91,15 +98,15 @@ def inventory(owner):
     items = []
     with home_lock(h):
         rotation = rotation_status(h)
-        for path in sorted((h / "approved").glob("*.json")):
+        for entry in gate_list(h)["approved"]:
             item = {
-                "id": path.stem,
+                "id": entry["id"],
                 "can_recover": False,
                 "status": "unconfirmed",
                 "message": "State could not be read. Preserve the original approval and inspect the operator logs.",
             }
             try:
-                q = ref.read(path)
+                q = approved_request(h, entry["id"])
                 receipt = call(["recover", h / "receiver/state"], q)
                 item["document"] = q["approval"]["payload"]["document"]
                 if receipt is not None:

@@ -138,10 +138,10 @@ class Hardening(unittest.TestCase):
         first = self.b.commit(identity)
         self.assertEqual(first["verification_status"], "local_consistency_verified")
         # Existing approved artifact remains immutable through every retry.
-        raw = self.b.file("approved", identity).read_bytes()
+        raw = json.dumps(self.b.request(identity))
         for _ in range(3):
             self.assertEqual(self.b.commit(identity)["document_version"], 1)
-        self.assertEqual(self.b.file("approved", identity).read_bytes(), raw)
+        self.assertEqual(json.dumps(self.b.request(identity)), raw)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish = false
+[features]
+# Planned key handover (rotation.rs) and the storage pilot (storage.rs). Off by default.
+experimental = []
 [dependencies]
 openproof-core = { path = "../openproof-core" }
 serde.workspace = true

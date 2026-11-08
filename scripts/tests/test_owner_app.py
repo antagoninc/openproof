@@ -1,5 +1,5 @@
 import os
-import hashlib, http.client, json, sys, tempfile, threading, unittest
+import hashlib, http.client, json, sqlite3, sys, tempfile, threading, unittest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -30,11 +30,19 @@ class OwnerAppTests(unittest.TestCase):
     def test_review_binds_all_fields_and_is_one_use(self):
         identity = self.proposed()
         review = self.o.review(identity)
-        p = self.o.broker.file("proposals", identity)
-        data = ref.read(p)
+        db = sqlite3.connect(self.h / "authority/gate/gate.db")
+        (raw,) = db.execute(
+            "SELECT proposal FROM proposals WHERE id=?", (identity,)
+        ).fetchone()
+        data = json.loads(raw)
         data["document"] = "other"
-        p.write_text(json.dumps(data))
-        with self.assertRaises(ValueError):
+        db.execute(
+            "UPDATE proposals SET proposal=? WHERE id=?", (json.dumps(data), identity)
+        )
+        db.commit()
+        db.close()
+        # The gate refuses a stored proposal that no longer matches its id.
+        with self.assertRaisesRegex(RuntimeError, "does not match"):
             self.o.approve(identity, review["review_token"])
         with self.assertRaises(ValueError):
             self.o.approve(identity, review["review_token"])
