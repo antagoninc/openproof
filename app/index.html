@@ -3,186 +3,244 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Antagon OpenProof</title>
+    <meta name="color-scheme" content="light dark" />
+    <title>OpenProof · Owner</title>
     <link rel="stylesheet" href="/app.css" />
     <script src="/app.js" defer></script>
   </head>
   <body>
-    <aside>
-      <a class="brand" href="/">A<span>OPENPROOF</span></a>
-      <p class="eyebrow">OWNER WORKSPACE</p>
-      <nav>
-        <a href="#activity">◎ &nbsp; Activity</a
-        ><a href="#compose">＋ &nbsp; New action</a
-        ><a href="#recovery">↻ &nbsp; Recovery</a
-        ><a href="#boundaries">◈ &nbsp; Assurance</a>
-      </nav>
-      <div class="aside-note">
-        <span class="dot"></span> Local development<br /><small
-          >Private by default.<br />Explicit about trust.</small
-        >
+    <a class="skip" href="#queue">Skip to your actions</a>
+    <header class="topbar">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="1" y="1" width="30" height="30" rx="9" />
+          <path d="M9 16.5l4.5 4.5L23 11.5" />
+        </svg>
+        <span class="brand-name">OpenProof</span>
+        <span class="brand-role">Owner</span>
       </div>
-    </aside>
-    <main>
-      <header>
-        <span class="eyebrow">ANTAGON / EXECUTION ASSURANCE</span
-        ><span class="pill">Experimental · Private preview</span>
-      </header>
-      <section class="hero">
-        <h1>Confidence starts<br />with a clear account.</h1>
-        <p>
-          Review the action. Authorize the exact change.<br />Follow the
-          evidence, all the way through.
-        </p>
-      </section>
-      <div id="message" role="status" aria-live="polite">
-        Connecting to your local workspace…
+      <ul class="chips" id="chips" aria-label="Workspace status"></ul>
+      <button id="new-change" class="primary" type="button">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+        New change
+      </button>
+    </header>
+
+    <div id="message" class="toast" role="status" aria-live="polite">
+      Connecting to your local workspace…
+    </div>
+
+    <main class="layout">
+      <div class="work">
+        <section class="stats" aria-label="Summary">
+          <article class="stat" data-tone="attention">
+            <span class="stat-label">Needs your review</span>
+            <strong id="pending">—</strong>
+          </article>
+          <article class="stat" data-tone="ready">
+            <span class="stat-label">Ready to execute</span>
+            <strong id="ready">—</strong>
+          </article>
+          <article class="stat" data-tone="done">
+            <span class="stat-label">Executed</span>
+            <strong id="committed">—</strong>
+          </article>
+          <article class="stat" data-tone="verified">
+            <span class="stat-label">Checked locally</span>
+            <strong id="verified">—</strong>
+          </article>
+        </section>
+
+        <section class="card" id="queue" aria-labelledby="queue-title">
+          <div class="card-head">
+            <div>
+              <h2 id="queue-title">Needs you</h2>
+              <p class="sub">
+                Review, approve and execute are three separate decisions.
+              </p>
+            </div>
+            <button id="refresh" class="ghost" type="button">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5" /></svg>
+              Refresh
+            </button>
+          </div>
+          <div id="items" class="items"></div>
+        </section>
+
+        <section class="card" id="activity" aria-labelledby="history-title">
+          <div class="card-head">
+            <div>
+              <h2 id="history-title">History</h2>
+              <p class="sub">Executed, checked and closed actions.</p>
+            </div>
+          </div>
+          <div id="history" class="items"></div>
+        </section>
       </div>
-      <section class="panel">
-        <span class="eyebrow">START HERE / THREE DELIBERATE STEPS</span>
-        <h2>Your first verified action</h2>
-        <p>
-          <strong>1. Review</strong> the proposed text and document version.
-          <strong>2. Approve</strong> those exact bytes.
-          <strong>3. Execute</strong> the approved action, then export its
-          evidence below.
-        </p>
-        <p class="muted">
-          Retry recovers an existing result. It does not grant a new approval.
-          The exported viewer explains how someone else can verify with
-          separately trusted public information.
-        </p>
-      </section>
-      <section class="panel" id="passkey">
-        <span class="eyebrow">OWNER PASSKEY</span>
-        <h2>Approve with your passkey</h2>
-        <p id="passkey-status" class="muted">Checking passkey status…</p>
-        <button id="passkey-setup" class="secondary" hidden>
-          Set up passkey
-        </button>
-      </section>
-      <section class="metrics">
-        <article>
-          <span>Awaiting your review</span><strong id="pending">—</strong>
-        </article>
-        <article>
-          <span>Committed actions</span><strong id="committed">—</strong>
-        </article>
-        <article>
-          <span>Recorded local checks</span><strong id="verified">—</strong>
-        </article>
-      </section>
-      <section class="panel" id="activity">
-        <div class="section-head">
-          <div>
-            <span class="eyebrow">YOUR EVIDENCE TRAIL</span>
-            <h2>Recent activity</h2>
+
+      <aside class="rail">
+        <section class="card" id="passkey" aria-labelledby="passkey-title">
+          <div class="rail-head">
+            <span class="rail-icon" aria-hidden="true">
+              <svg viewBox="0 0 20 20"><path d="M7 9V7a3 3 0 0 1 6 0v2M5.5 9h9v7h-9z" /></svg>
+            </span>
+            <h2 id="passkey-title">Owner passkey</h2>
+            <span id="passkey-badge" class="badge" data-tone="muted">Checking</span>
           </div>
-          <button id="refresh" class="secondary">Refresh</button>
-        </div>
-        <div id="items" class="items"></div>
-      </section>
-      <section class="panel" id="recovery">
-        <div class="section-head">
-          <div>
-            <span class="eyebrow">RECOVERY CENTER</span>
-            <h2>Continue with a clear next step.</h2>
+          <p id="passkey-status" class="sub">Checking passkey status…</p>
+          <button id="passkey-setup" class="secondary block" type="button" hidden>
+            Set up passkey
+          </button>
+        </section>
+
+        <section class="card" id="recovery" aria-labelledby="recovery-title">
+          <div class="rail-head">
+            <span class="rail-icon" aria-hidden="true">
+              <svg viewBox="0 0 20 20"><path d="M10 3l6 2.5v4c0 3.6-2.6 6.3-6 7.5-3.4-1.2-6-3.9-6-7.5v-4z" /></svg>
+            </span>
+            <h2 id="recovery-title">Health</h2>
           </div>
-          <button id="recovery-refresh" class="secondary">
+          <p id="recovery-summary" class="sub" role="status">
+            Check the receiver, the witness and any action that needs recovery.
+          </p>
+          <dl id="health-list" class="kv" hidden></dl>
+          <div id="recovery-items" class="mini-items"></div>
+          <p id="certificate-summary" class="fine"></p>
+          <button id="recovery-refresh" class="secondary block" type="button">
             Check recovery
           </button>
-        </div>
-        <p class="muted">
-          Recovery refreshes an existing durable result. It cannot approve or
-          execute an uncommitted action.
-        </p>
-        <p id="recovery-summary" role="status">
-          Select Check recovery to inspect current role state.
-        </p>
-        <div id="recovery-items"></div>
-        <h3>Connection certificates</h3>
-        <p id="certificate-summary" class="muted">
-          Certificate details appear when recovery is checked.
-        </p>
-      </section>
-      <section class="panel" id="compose">
-        <span class="eyebrow">01 / PROPOSE</span>
-        <h2>What should change?</h2>
-        <p class="muted">
-          This local adapter updates a document in the receiver’s database.
-          Creating a proposal does not authorize execution.
-        </p>
-        <form id="proposal-form">
-          <div class="fields">
-            <label
-              >Document name<input
-                name="document"
-                value="project-status"
-                pattern="[A-Za-z0-9_-]{1,80}"
-                required /></label
-            ><label
-              >Current document version<input
-                name="expected_version"
-                type="number"
-                min="0"
-                value="0"
-                required
-            /></label>
+        </section>
+
+        <section class="card" id="evidence" aria-labelledby="evidence-title">
+          <div class="rail-head">
+            <span class="rail-icon" aria-hidden="true">
+              <svg viewBox="0 0 20 20"><path d="M10 3v9m-3.5-3.5L10 12l3.5-3.5M4 14v2.5h12V14" /></svg>
+            </span>
+            <h2 id="evidence-title">Evidence</h2>
           </div>
-          <label
-            >Proposed document content<textarea
-              name="content"
-              rows="6"
-              placeholder="Paste the exact report or document you want to store…"
-              required
-            ></textarea></label
-          ><button type="submit">Create proposal <span>→</span></button>
-        </form>
-      </section>
-      <section class="boundary" id="boundaries">
-        <span class="eyebrow">KNOW WHAT THE EVIDENCE MEANS</span>
-        <h2>Verified statements. Explicit limits.</h2>
-        <p>
-          These roles share one host owner. A local check binds an approval, a
-          receiver’s database receipt and a witness checkpoint. It does not
-          prove physical effects, model truth, independent custody or a human
-          audit.
-        </p>
-        <p id="mode" class="muted"></p>
-        <button id="paging" class="secondary">
-          Enable incremental evidence
-        </button>
-        <div class="dialog-actions">
-          <button id="export" class="secondary">Export evidence</button>
-        </div>
-        <p id="export-result" class="muted"></p>
-      </section>
-      <footer>
-        Antagon OpenProof · Open-source prototype · Experimental, not audited
-      </footer>
+          <p id="mode" class="sub"></p>
+          <button id="paging" class="secondary block" type="button" hidden>
+            Enable incremental evidence
+          </button>
+          <button id="export" class="secondary block" type="button">
+            Export evidence
+          </button>
+          <p id="export-result" class="fine"></p>
+        </section>
+
+        <section class="card limits" id="boundaries" aria-labelledby="limits-title">
+          <h2 id="limits-title">What a local check means</h2>
+          <ul class="checks">
+            <li data-ok="yes">The owner approved this exact content and version.</li>
+            <li data-ok="yes">The receiver signed a receipt for that approval.</li>
+            <li data-ok="yes">A witness checkpoint covers the receipt.</li>
+            <li data-ok="no">Not proof of physical effects or model truth.</li>
+            <li data-ok="no">Not independent custody: the roles share one host owner.</li>
+            <li data-ok="no">Not a human audit.</li>
+          </ul>
+        </section>
+      </aside>
     </main>
-    <dialog id="review">
-      <span class="eyebrow">02 / REVIEW EXACT CHANGE</span>
-      <h2>Your approval matters.</h2>
-      <p id="review-target"></p>
-      <pre id="review-content"></pre>
-      <p class="muted">Content SHA-256</p>
-      <code id="review-digest"></code>
-      <p class="muted" id="passkey-note" hidden>
-        Passkey challenge (approval SHA-256). Confirm with your passkey only if
-        the content above is what you want.
-      </p>
-      <code id="review-approval" hidden></code
-      ><label class="check"
-        ><input type="checkbox" id="confirm" />I reviewed this exact content and
-        document version.</label
-      >
-      <div class="dialog-actions">
-        <button id="cancel" class="secondary">Cancel</button
-        ><button id="approve" disabled>Approve this change</button>
+
+    <footer class="foot">
+      OpenProof · open-source prototype · experimental, not audited ·
+      no analytics, no remote assets
+    </footer>
+
+    <dialog id="compose" aria-labelledby="compose-title">
+      <form id="proposal-form">
+        <div class="sheet-head">
+          <div>
+            <span class="kicker">Step 1 of 3 · Propose</span>
+            <h2 id="compose-title">What should change?</h2>
+          </div>
+          <button class="icon-btn" type="button" data-close="compose" aria-label="Close">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
+          </button>
+        </div>
+        <p class="sub">
+          This updates one document in the receiver’s database. Creating a
+          proposal grants nothing: you review and approve it next.
+        </p>
+        <div class="fields">
+          <label class="field"
+            ><span>Document name</span
+            ><input
+              name="document"
+              value="project-status"
+              pattern="[A-Za-z0-9_\-]{1,80}"
+              autocomplete="off"
+              spellcheck="false"
+              required
+          /></label>
+          <label class="field narrow"
+            ><span>Current version</span
+            ><input name="expected_version" type="number" min="0" value="0" required
+          /></label>
+        </div>
+        <p id="version-hint" class="fine"></p>
+        <label class="field"
+          ><span>Exact new content</span
+          ><textarea
+            name="content"
+            rows="9"
+            spellcheck="false"
+            placeholder="Paste the exact text the document should contain…"
+            required
+          ></textarea
+        ></label>
+        <div class="digest-line">
+          <span id="content-size">0 bytes</span>
+          <span class="fine">SHA-256</span>
+          <code id="content-digest">—</code>
+        </div>
+        <div class="sheet-actions">
+          <button class="ghost" type="button" data-close="compose">Cancel</button>
+          <button type="submit" class="primary">Create proposal</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="review" class="wide" aria-labelledby="review-title">
+      <div class="sheet-head">
+        <div>
+          <span class="kicker">Step 2 of 3 · Review and approve</span>
+          <h2 id="review-title">Review the exact change</h2>
+        </div>
+        <button class="icon-btn" type="button" id="cancel-x" aria-label="Close">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
+        </button>
       </div>
-      <p class="muted">
-        Approval and execution are separate. You will choose when to execute.
+      <div class="review-meta">
+        <div><span class="fine">Document</span><strong id="review-doc"></strong></div>
+        <div><span class="fine">Version</span><strong id="review-target"></strong></div>
+        <div><span class="fine">Change</span><strong id="review-delta"></strong></div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Review view">
+        <button type="button" role="tab" id="tab-diff" aria-selected="true">Changes</button>
+        <button type="button" role="tab" id="tab-full" aria-selected="false">Full new text</button>
+      </div>
+      <div id="review-diff" class="diff" role="tabpanel" aria-labelledby="tab-diff"></div>
+      <pre id="review-content" class="fulltext" role="tabpanel" aria-labelledby="tab-full" hidden></pre>
+      <div class="digest-box">
+        <span class="fine">Content SHA-256</span>
+        <code id="review-digest"></code>
+        <span class="fine" id="passkey-note" hidden>Passkey challenge (approval SHA-256)</span>
+        <code id="review-approval" hidden></code>
+      </div>
+      <label class="check"
+        ><input type="checkbox" id="confirm" /><span
+          >I reviewed this exact content and document version.</span
+        ></label
+      >
+      <div class="sheet-actions">
+        <button id="cancel" class="ghost" type="button">Cancel</button>
+        <button id="approve" class="primary" type="button" disabled>
+          Approve this change
+        </button>
+      </div>
+      <p class="fine center">
+        Approval does not execute anything. You choose when to execute.
       </p>
     </dialog>
   </body>

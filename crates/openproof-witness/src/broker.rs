@@ -126,6 +126,23 @@ pub fn current_version(home: &Path, document: &str) -> Option<u64> {
     }
 }
 
+/// The receiver's current text of a document, for showing what a change
+/// replaces. `Some(None)` when the document does not exist yet; `None` when
+/// the receiver cannot answer now. Display only: approval binds the proposal.
+pub fn current_document(home: &Path, document: &str) -> Option<Option<(u64, String)>> {
+    match call(
+        &["document".into(), state(home, "receiver"), document.into()],
+        None,
+    ) {
+        Ok(v) => Some(Some((
+            v["version"].as_u64()?,
+            v["content"].as_str()?.to_string(),
+        ))),
+        Err(e) if e.to_string().contains("no rows") => Some(None),
+        Err(_) => None,
+    }
+}
+
 pub fn recover_receipt(home: &Path, request: &Value) -> Result<Value> {
     call(&["recover".into(), state(home, "receiver")], Some(request))
 }

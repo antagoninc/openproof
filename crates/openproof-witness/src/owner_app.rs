@@ -278,6 +278,16 @@ impl Owner {
 
     fn review(&mut self, id: &str) -> Result<Value> {
         let mut r = broker::review(&self.home, id)?;
+        // What the change replaces, for display. The review binding and the
+        // approval cover only the proposal, never this text.
+        r["current"] = match r["proposal"]["document"]
+            .as_str()
+            .and_then(|d| broker::current_document(&self.home, d))
+        {
+            Some(Some((version, content))) => json!({"version": version, "content": content}),
+            Some(None) => json!({"version": 0, "content": null}),
+            None => Value::Null,
+        };
         self.reviews.retain(|_, v| v.at.elapsed() < TOKEN_LIFE);
         if self.reviews.len() >= 100 {
             return Err("Too many outstanding reviews".into());

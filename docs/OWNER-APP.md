@@ -16,12 +16,12 @@ The app listens only on `127.0.0.1`, on an automatically selected port or the on
 ## Daily flow
 
 1. Enter the exact document content and expected current version. Creating a proposal grants no permission.
-2. Review the document, version, full content and content digest. The review token expires after five minutes and can be used only once. Changing any proposal field invalidates it.
+2. Review the document, version, full content and content digest. The review also shows, for display only, the lines the change adds and removes against the receiver's current text; the approval binds the proposal alone. The review token expires after five minutes and can be used only once. Changing any proposal field invalidates it.
 3. Approve, then separately choose execution. The Rust approval gate makes the approval decision. It signs only the stored proposal with the review binding that you saw. With a passkey, it stores the approval only after it verifies your passkey assertion ([PASSKEY.md](PASSKEY.md)). The receiver checks the signed content/version/nonce binding and commits its own document database and receipt atomically.
 4. Use **Recover / refresh** on the same action after an interruption. Durable recovery precedes new dispatch. A committed update with unavailable evidence is not reported as fully verified.
 5. An expired, uncommitted approval can be proposed for fresh review. The app first checks for a durable receipt; it never automatically grants new authorization. Exact expected-version binding still prevents two updates if the original commits concurrently.
 
-The activity list displays recorded local assessments and marks old checkpoints as needing refresh. Opening the list does not independently reverify every historical signature. Committed and checked counters overlap because they describe stages of the same action. A signature is not proof of model truth, physical-world effects or operator independence.
+The workspace lists what needs the owner (review, execute, recover) apart from the history of executed and closed actions, with each action's progress through proposed, approved, executed and checked. It follows the system light or dark setting. The activity list displays recorded local assessments and marks old checkpoints as needing refresh. Opening the list does not independently reverify every historical signature. Committed and checked counters overlap because they describe stages of the same action. A signature is not proof of model truth, physical-world effects or operator independence.
 
 The UI's writes require its owner session, same-origin request, correct Host and an anti-CSRF header. Reports are rendered as text, never executable HTML. The browser session remains a high-trust owner capability. Other processes with the same account/Docker administration are outside this isolation boundary. Do not expose the owner app through a reverse proxy or tunnel.
 

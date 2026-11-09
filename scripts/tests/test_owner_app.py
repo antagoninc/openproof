@@ -172,6 +172,26 @@ class OwnerAppTests(unittest.TestCase):
         self.assertTrue(self.o.propose("report", 1, "new")["proposal_id"])
         self.assertTrue(self.o.propose("fresh-doc", 0, "new")["proposal_id"])
 
+    def test_review_shows_the_current_text_without_binding_it(self):
+        identity = self.proposed()
+        review = self.o.review(identity)
+        # A new document: there is no current text.
+        self.assertEqual(review["current"], {"version": 0, "content": None})
+        self.o.approve(identity, review["review_token"])
+        self.o.commit(identity)
+        second = self.o.propose("report", 1, "second text")["proposal_id"]
+        review = self.o.review(second)
+        self.assertEqual(
+            review["current"],
+            {"version": 1, "content": "<script>untrusted text</script>"},
+        )
+        self.assertEqual(review["proposal"]["content"], "second text")
+        # The approval still binds only the proposal.
+        self.o.approve(second, review["review_token"])
+        self.assertEqual(
+            self.o.commit(second)["verification_status"], "local_consistency_verified"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
