@@ -456,11 +456,11 @@ impl Owner {
         }
         let credential = text(m, "credential_id")?;
         unb64(credential, 1023)?;
-        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        use p256::elliptic_curve::sec1::ToSec1Point;
         use p256::pkcs8::DecodePublicKey;
         let key = p256::PublicKey::from_public_key_der(&unb64(text(m, "public_key")?, 1024)?)
             .map_err(|_| "passkey must be ECDSA P-256")?;
-        let point = hex::encode(key.to_encoded_point(false).as_bytes());
+        let point = hex::encode(key.to_sec1_point(false).as_bytes());
         let result = broker::enroll_passkey(&self.home, &point, RP_ID, &self.origin)?;
         replace_json(
             self.home.join("passkey.json"),

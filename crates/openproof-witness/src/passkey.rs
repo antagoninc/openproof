@@ -279,7 +279,7 @@ mod tests {
     }
 
     fn passkey(from_sequence: u64) -> OwnerPasskey {
-        let point = owner_key().verifying_key().to_encoded_point(false);
+        let point = owner_key().verifying_key().to_sec1_point(false);
         OwnerPasskey {
             public_key: hex::encode(point.as_bytes()),
             rp_id: "localhost".into(),
