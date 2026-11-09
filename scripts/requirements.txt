@@ -1,4 +1,4 @@
 -r ../reference/python/requirements.txt
 certifi==2026.10.23
-
--r storage-requirements.txt
+# RFC 8785 canonical JSON for the TRACE bridge (integrations/trace), the library TRACE uses.
+rfc8785==0.1.4

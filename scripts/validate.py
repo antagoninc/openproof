@@ -60,6 +60,7 @@ run(
         "--quiet",
         "scripts",
         "reference/python",
+        "integrations",
     ],
 )
 run(

@@ -87,7 +87,7 @@ outputs/local-venv/bin/python scripts/verify_history.py EXTRACTED_ARCHIVE \
   --go-binary outputs/tooling/openproof-go-verify --out outputs/my-offline-check
 ```
 
-[Compatibility policy](docs/COMPATIBILITY.md) · [Controlled preview checklist](docs/RELEASE-CHECKLIST.md) · [Experiments kept in history](docs/EXPERIMENTS.md)
+[TRACE link](integrations/trace/README.md) · [Compatibility policy](docs/COMPATIBILITY.md) · [Controlled preview checklist](docs/RELEASE-CHECKLIST.md) · [Experiments kept in history](docs/EXPERIMENTS.md)
 
 ## What the evidence means
 
@@ -126,6 +126,7 @@ The workflow performs checks and builds only. It does not publish packages, uplo
 | `reference/go-witness` | Separate Go verifier of exported histories | Yes (G3) |
 | `scripts/local_roles.py` | Installer for separate role accounts | Yes, when installed |
 | `crates/openproof-runtime`, `crates/openproof-trust`, `crates/openproof-cli` | Original v1 action bundles | No; kept for compatibility |
+| `integrations/trace` | Links OpenProof approvals to TRACE Trust Records as `approval-outcome` references | No |
 | other `scripts` | Tests, conformance suites, validation and demonstrations | No |
 | `schemas` / `fixtures` / `fuzz` | Versioned formats, public synthetic evidence and fuzz targets | Test material |
 

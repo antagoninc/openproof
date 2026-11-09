@@ -97,6 +97,7 @@ depends on them.
 | Planned key handover and storage pilot formats | `crates/openproof-witness/src/rotation.rs`, `storage.rs`, `cli_experimental.rs` | Experimental; Cargo feature `experimental`, not in the default build |
 | Original v1 action bundles | `crates/openproof-trust`, `crates/openproof-runtime`, `crates/openproof-cli` | Kept for compatibility; not on the main path |
 | Python bindings and tools | `scripts/witness_workflow.py`, `scripts/paged_workflow.py`, `scripts/portable_history.py`, `scripts/witness_client.py`, conformance suites, `scripts/validate.py` | Call the binary for tests and tools; the legacy `upgrade-trust` migration stays here |
+| TRACE link | `integrations/trace/` | Builds and checks TRACE `approval-outcome` references to OpenProof approvals; no guarantee depends on it |
 | Tests | `scripts/tests/`, Rust test modules, `scripts/*_smoke.mjs` | Test material |
 
 ## Reduction plan
