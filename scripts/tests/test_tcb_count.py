@@ -24,12 +24,12 @@ class TcbCountTests(unittest.TestCase):
         finally:
             tcb_count.TRUSTED.clear()
             tcb_count.TRUSTED.update(saved)
-        self.assertEqual(
+        # The count then also differs from the totals stated in docs/TCB.md.
+        self.assertIn(
+            "crates/openproof-receiver/src/files.rs is in a trusted crate but not listed",
             found,
-            [
-                "crates/openproof-receiver/src/files.rs is in a trusted crate but not listed"
-            ],
         )
+        self.assertTrue(any("docs/TCB.md does not state" in f for f in found), found)
 
     def test_an_unlisted_file_on_the_review_origin_fails(self):
         saved = dict(tcb_count.TRUSTED)
@@ -39,9 +39,9 @@ class TcbCountTests(unittest.TestCase):
         finally:
             tcb_count.TRUSTED.clear()
             tcb_count.TRUSTED.update(saved)
-        self.assertEqual(
+        self.assertIn(
+            "the review origin serves or loads app/approval.js, which is not listed",
             found,
-            ["the review origin serves or loads app/approval.js, which is not listed"],
         )
 
     def test_counting_rules(self):

@@ -16,6 +16,8 @@ let busy = false,
 async function action(fn, button) {
   if (busy) return;
   busy = true;
+  // Also in the page, so that a check can wait for the operation to end.
+  document.body.dataset.state = "busy";
   if (button) {
     button.classList.add("busy");
     button.setAttribute("aria-busy", "true");
@@ -26,6 +28,7 @@ async function action(fn, button) {
     say(e.message, "bad");
   } finally {
     busy = false;
+    document.body.dataset.state = "idle";
     if (button) {
       button.classList.remove("busy");
       button.removeAttribute("aria-busy");
@@ -262,7 +265,23 @@ async function refresh() {
       ? chip("Separate role services", "good")
       : chip("Roles share this account", ""),
     s.paused ? chip("Admission paused", "bad") : chip("Admission open", "good"),
+    ...(s.trust.expired ? [chip("Trust expired", "bad")] : []),
   );
+
+  // The trust lasts one day. Nothing is approved or executed after it expires.
+  const until = s.trust.expires_at
+    ? new Date(s.trust.expires_at * 1000).toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      })
+    : "an unknown time";
+  const left = (s.trust.expires_at || 0) - Date.now() / 1000;
+  $("trust-summary").textContent = s.trust.expired
+    ? "The trust expired on " +
+      until +
+      ". Approvals and execution are refused until you renew it."
+    : "The trust is valid until " + until + ". It lasts one day.";
+  $("renew").hidden = !s.trust.expired && left > 2 * 3600;
 
   $("mode").textContent = s.paused
     ? s.rotation_message || "Admission paused for key handover."
@@ -511,6 +530,14 @@ async function recoveryRefresh() {
       ? "The receiver and the witness run under their own accounts. Check them with local_roles.py status."
       : "The receiver and the witness run in this account. See LOCAL-ROLES.md to separate them.";
 }
+$("renew").onclick = () =>
+  action(async () => {
+    await api("renew", {});
+    await refresh();
+    say("Trust renewed for one day. Your keys, passkey and history are unchanged.");
+    await quietHealth();
+  }, $("renew"));
+
 $("recovery-refresh").onclick = () =>
   action(async () => {
     await recoveryRefresh();
@@ -529,9 +556,12 @@ action(async () => {
   history.replaceState(null, "", "/");
   reviewOrigin = (await startSession(NOTES[fragment] ? "" : fragment)).review;
   await refresh();
-  say(
-    NOTES[fragment] ||
-      "Your workspace is ready. Approval and execution are separate steps.",
-  );
+  if (status.trust.expired && !NOTES[fragment])
+    say("The trust expired. Select Renew trust under Health to continue.", "bad");
+  else
+    say(
+      NOTES[fragment] ||
+        "Your workspace is ready. Approval and execution are separate steps.",
+    );
   await quietHealth();
 });

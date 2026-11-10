@@ -89,13 +89,13 @@ try {
     await send("Page.navigate", { url });
     await until(ready, url);
   };
-  // The workspace ignores clicks until its start-up check has finished.
+  // The workspace ignores clicks while an operation runs, start-up included.
   const workspace = (url) =>
     go(
       url,
       async () =>
         (await message()).includes("workspace is ready") &&
-        (await evaluate("document.getElementById('health-list')?.hidden === false")),
+        (await evaluate("document.body.dataset.state === 'idle'")),
     );
   await workspace(first.url);
 
@@ -249,7 +249,7 @@ try {
     JSON.stringify(id.slice(0, 12)) +
     "))";
   const execute = async (id) => {
-    await until(() => evaluate("document.getElementById('health-list')?.hidden === false"), "health");
+    await until(() => evaluate("document.body.dataset.state === 'idle'"), "idle");
     await until(() => evaluate(row(id) + "?.querySelector('button')?.textContent==='Execute approved action'"), "execute button");
     await evaluate(row(id) + ".querySelector('button').click()");
     await until(async () => (await api("status")).items.find((i) => i.id === id)?.stage === "Verified locally", "execution");

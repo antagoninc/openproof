@@ -15,7 +15,8 @@ counted. In a file listed with `regions`, only the lines between
 - the role binary or the receiver crate depends on another workspace crate
   than `openproof-core` and `openproof-receiver`;
 - the review origin serves a file that is not listed, or a listed page or
-  module loads one (HTML `src`/`href`, ES module imports).
+  module loads one (HTML `src`/`href`, ES module imports);
+- docs/TCB.md does not state the counted totals.
 """
 
 import argparse, json, re, subprocess, sys
@@ -109,6 +110,15 @@ def problems(r, budget):
     found = []
     if r["total"] > budget:
         found.append(f"trusted code is {r['total']} lines, over the budget of {budget}")
+    # docs/TCB.md must state the totals that this script counts.
+    stated = (ROOT / "docs/TCB.md").read_text()
+    g = r["by_guarantee"]
+    for line in [
+        f"Totals: G1 {g[G1]:,} lines, G2 {g[G2]:,}, G3 {g[G3]:,}.",
+        f"**Total trusted code: {r['total']:,} lines**",
+    ]:
+        if line not in stated:
+            found.append(f"docs/TCB.md does not state: {line}")
     for crate in ["openproof-receiver", "openproof-role"]:
         for f in sorted((ROOT / "crates" / crate / "src").rglob("*.rs")):
             rel = str(f.relative_to(ROOT))

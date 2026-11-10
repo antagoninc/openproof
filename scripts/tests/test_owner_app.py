@@ -56,6 +56,44 @@ class OwnerAppTests(unittest.TestCase):
             self.o.approve(identity, review["review_token"])
         self.assertEqual(call(["head", self.h / "receiver/state"])["count"], 0)
 
+    def test_expired_trust_is_named_and_renewed_from_the_workspace(self):
+        from witness_workflow import install_trust
+
+        identity = self.proposed()
+        self.assertFalse(self.o.status()["trust"]["expired"])
+        # A new trust epoch that expires in two seconds.
+        t = ref.read(self.h / "trust.json")
+        t["epoch"] += 1
+        t["expires_at"] = int(time.time()) + 2
+        short = self.h.parent / "short-trust.json"
+        short.write_text(json.dumps(t))
+        install_trust(self.h, short)
+        time.sleep(3)
+        status = self.o.status()["trust"]
+        self.assertEqual(
+            (status["expired"], status["expires_at"]), (True, t["expires_at"])
+        )
+        # Review and execution say why they are refused.
+        for route in ["review", "commit"]:
+            code, data = self.o.post(route, {"id": identity})
+            self.assertEqual(code, 409)
+            self.assertIn("trust configuration expired", data["error"])
+        # Renewal is a workspace request; the review origin does not serve it.
+        code, _, _ = self.o.request(
+            "POST",
+            "/api/renew",
+            "{}",
+            {"Origin": self.o.review_origin, "Content-Type": "application/json"},
+            origin=self.o.review_origin,
+        )
+        self.assertEqual(code, 404)
+        code, data = self.o.post("renew", {})
+        self.assertEqual((code, data["installed_epoch"]), (200, t["epoch"] + 1))
+        self.assertFalse(self.o.status()["trust"]["expired"])
+        self.o.approve(identity, self.o.review(identity)["review_token"])
+        result = self.o.commit(identity)
+        self.assertEqual(result["verification_status"], "local_consistency_verified")
+
     def test_witness_outage_recovery_and_portable_history(self):
         identity = self.approved()
         key = self.h / "witness/key.secret"

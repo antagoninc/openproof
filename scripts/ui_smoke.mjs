@@ -26,6 +26,9 @@ try {
   const message = () => evaluate("document.getElementById('message')?.textContent ?? ''");
   await send("Page.navigate", { url: session.url });
   await until(async () => (await message()).includes("workspace is ready"), "workspace");
+  // The workspace ignores clicks while an operation runs, start-up included.
+  const idle = () => until(() => evaluate("document.body.dataset.state === 'idle'"), "idle");
+  await idle();
 
   // 1. Propose. Untrusted text must render as text on the review page.
   const content = "<script>window.untrustedExecuted=true</script> Public browser test";
@@ -73,8 +76,7 @@ try {
     async () => (await evaluate("location.pathname")) === "/" && (await message()).includes("Approved."),
     "approval",
   );
-  // The workspace ignores clicks until its start-up check has finished.
-  await until(() => evaluate("document.getElementById('health-list')?.hidden === false"), "health");
+  await idle();
   const row = "[...document.querySelectorAll('.item')].find((r) => r.textContent.includes('browser-fixture'))";
   await until(
     () => evaluate(row + "?.querySelector('button')?.textContent==='Execute approved action'"),
@@ -85,8 +87,11 @@ try {
   await evaluate(row + ".querySelector('button').click()");
   await until(async () => (await api("status")).items[0]?.stage === "Verified locally", "execution");
   await until(() => evaluate(row + "?.querySelector('button')?.textContent==='Recover / refresh'"), "refresh button");
+  await idle();
   await evaluate(row + ".querySelector('button').click()");
-  await until(async () => (await message()).includes("Retrying never creates a second update"), "retry");
+  await idle();
+  if (!(await message()).includes("Retrying never creates a second update"))
+    throw Error("Retry was not confirmed: " + (await message()));
   const status = await api("status");
   if (status.items.length !== 1 || status.items[0].document_version !== 1)
     throw Error("Duplicate execution: " + JSON.stringify(status.items));

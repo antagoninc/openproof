@@ -95,6 +95,18 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; work
 // TCB:end
 const INVALID: &str =
     "Request or review no longer valid. Refresh and review the exact action again.";
+/// The trust lasts one day on a local home. Under an expired trust the gate
+/// signs nothing and the receiver admits nothing, so say so plainly.
+const EXPIRED: &str =
+    "The trust configuration expired. Select Renew trust in the workspace, then try again.";
+const NEEDS_TRUST: [&str; 6] = [
+    "/api/review",
+    "/api/approve",
+    "/api/approve/passkey",
+    "/api/commit",
+    "/api/recover",
+    "/api/paging",
+];
 const INTERRUPTED: &str =
     "Operation interrupted. Retry the same approved action to recover its outcome; do not create a replacement approval.";
 
@@ -179,6 +191,12 @@ impl Owner {
         Ok((configured, credential))
     }
 
+    /// When the installed trust expires, and whether it has.
+    fn trust_expiry(&self) -> Option<(u64, bool)> {
+        let at = self.trust().ok()?["expires_at"].as_u64()?;
+        Some((at, now() > at))
+    }
+
     fn localhost(&self) -> bool {
         self.origin.starts_with(&format!("http://{RP_ID}:"))
     }
@@ -259,6 +277,10 @@ impl Owner {
             "remote_services": h.join("service-client.json").exists(),
             "paging": h.join("paging.json").exists(),
             "paused": h.join("rotation-pending.json").exists(),
+            "trust": {
+                "expires_at": self.trust_expiry().map(|t| t.0),
+                "expired": self.trust_expiry().is_some_and(|t| t.1),
+            },
             "passkey": {
                 "configured": configured.is_some(),
                 "origin": configured.as_ref().map(|c| c["origin"].clone()).unwrap_or(json!(self.origin)),
@@ -696,6 +718,9 @@ impl Owner {
         {
             return (Err((403, "Owner session required".into())), false);
         }
+        if NEEDS_TRUST.contains(&r.path.as_str()) && self.trust_expiry().is_some_and(|t| t.1) {
+            return (Err((409, EXPIRED.into())), false);
+        }
         let id = || -> std::result::Result<String, (u16, String)> {
             let m = fields(&v, &["id"], &[]).map_err(invalid)?;
             Ok(text(m, "id").map_err(invalid)?.to_string())
@@ -753,6 +778,18 @@ impl Owner {
             "/api/paging" => fields(&v, &[], &[])
                 .map_err(invalid)
                 .and_then(|_| broker::enable_paging(&self.home).map_err(interrupted)),
+            // A new one-day trust epoch, signed with the root key in this home
+            // and installed in the receiver, the witness and the verifier. The
+            // roles keep their keys and a pinned owner passkey unchanged.
+            "/api/renew" => fields(&v, &[], &[]).map_err(invalid).and_then(|_| {
+                broker::renew(&self.home).map_err(|_| {
+                    (
+                        409,
+                        "The trust could not be renewed. Check that the receiver and the witness are running, then try again."
+                            .to_string(),
+                    )
+                })
+            }),
             "/api/archive" => fields(&v, &[], &[])
                 .map_err(invalid)
                 .and_then(|_| self.archive().map_err(interrupted)),
