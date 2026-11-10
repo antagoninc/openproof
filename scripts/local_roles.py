@@ -264,11 +264,25 @@ def snapshot_home(home, dest):
         os.close(home_fd)
     # Fold any write-ahead log into the copied databases.
     for db in dest.glob("*/state/*.db"):
-        c = sqlite3.connect(db)
-        c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        c = open_db(db)
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
         c.close()
     for p in dest.rglob("*"):
         os.chmod(p, 0o700 if p.is_dir() else 0o600)
+
+
+def open_db(path):
+    """Open a database that only root, or a stopped role service, can change.
+    Never read-only: the states use a write-ahead log, and a read-only open
+    of such a database can fail when its -wal file is absent (seen as "unable
+    to open database file" with the macOS system Python). An error names the
+    file."""
+    try:
+        db = sqlite3.connect(str(path))
+        db.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+        return db
+    except sqlite3.Error as e:
+        raise RuntimeError(f"{path}: {e}") from None
 
 
 def copy_state(source, target):
@@ -278,8 +292,8 @@ def copy_state(source, target):
         if item.name.endswith(("-wal", "-shm")):
             continue
         if item.suffix == ".db":
-            src = sqlite3.connect(f"file:{item}?mode=ro", uri=True)
-            dst = sqlite3.connect(target / item.name)
+            src = open_db(item)
+            dst = sqlite3.connect(str(target / item.name))
             with dst:
                 src.backup(dst)
             src.close()
@@ -473,7 +487,7 @@ def home_lock(home, owner):
 
 def state_head(state):
     """History length and pinned root of a role state, read directly."""
-    db = sqlite3.connect(f"file:{Path(state) / 'state.db'}?mode=ro", uri=True)
+    db = open_db(Path(state) / "state.db")
     try:
         count = db.execute("SELECT COALESCE(MAX(seq),0) FROM events").fetchone()[0]
         anchored = db.execute(
@@ -608,29 +622,42 @@ def _move_roles(
 def return_roles(source, home, owner):
     """Put the role folders prepared in `source` (root-only) into the owner
     home, in place of its empty role folders. Nothing in the owner home is
-    followed or written through."""
+    followed or written through. All folders are checked before one moves."""
     roles = [role for role in ROLES if (source / role).exists()]
     for role in roles:
         chown_tree(source / role, owner.pw_uid, owner.pw_gid)
     home_fd = open_dir(home)
     try:
+        present = []
         for role in roles:
             try:
                 fd = open_dir(role, home_fd)
             except FileNotFoundError:
-                fd = None
-            if fd is not None:
-                try:
-                    if os.listdir(fd):
-                        raise RuntimeError(
-                            f"{home / role} is not empty. Move its contents aside first."
-                        )
-                finally:
-                    os.close(fd)
+                continue
+            try:
+                if os.listdir(fd):
+                    raise RuntimeError(
+                        f"{home / role} is not empty. Move its contents aside first."
+                    )
+            finally:
+                os.close(fd)
+            present.append(role)
+        for role in roles:
+            if role in present:
                 os.rmdir(role, dir_fd=home_fd)
             os.rename(source / role, role, dst_dir_fd=home_fd)
     finally:
         os.close(home_fd)
+
+
+def same_volume(home, base):
+    """Role folders move between the home and `base` by rename, which never
+    follows a link. That needs both on one volume."""
+    if os.stat(home).st_dev != os.stat(base).st_dev:
+        raise RuntimeError(
+            f"{home} and {base} are on different volumes. Use a home on the "
+            "same volume as the role location."
+        )
 
 
 def install(home, base, users, manager):
@@ -654,7 +681,7 @@ def install(home, base, users, manager):
                 raise RuntimeError(f"{home / role / need} is missing.")
     owner_entry = pwd.getpwuid(owner)
     with home_lock(home, owner_entry):
-        for left in ["sockets", "staging", *ROLES]:
+        for left in ["sockets", *ROLES]:
             if (base / left).exists():
                 raise RuntimeError(
                     f"{base / left} already exists. Run uninstall first or move it aside."
@@ -665,8 +692,10 @@ def install(home, base, users, manager):
         refuse_writable(
             [base], owner, "Role keys and code would be in the owner's reach."
         )
+        same_volume(home, base)
         # Root works only on a copy of the owner's files made without links.
         staging = base / "staging"
+        shutil.rmtree(staging, ignore_errors=True)  # From an interrupted install.
         try:
             snapshot_home(home, staging)
             before = heads(staging)
@@ -814,6 +843,7 @@ def uninstall(home, base):
     home = home.resolve()
     record = load_record(base, home, UNINSTALLABLE)
     owner = pwd.getpwnam(record["owner"])
+    same_volume(home, base)
     with home_lock(home, owner):
         # Read the role states directly, not through the services: uninstall
         # must work even when a service does not answer.
@@ -823,17 +853,26 @@ def uninstall(home, base):
         before = heads(base)
         say("2/4 Return the role keys and state to the owner home")
         # Prepare the returned folders where the owner cannot reach, check
-        # them, then move them into place.
+        # them, then move them into place. The role folders stay as they are
+        # until that has worked, so a failed uninstall can be run again.
+        for old in base.glob("restore-*"):  # From an interrupted uninstall.
+            shutil.rmtree(old)
         restore = base / ("restore-" + time.strftime("%Y%m%dT%H%M%S"))
         restore.mkdir(mode=0o700)
-        for role in ROLES:
-            (restore / role).mkdir(mode=0o700)
-            copy_state(base / role / "state", restore / role / "state")
-            shutil.copy2(base / role / "key.secret", restore / role / "key.secret")
-        after = heads(restore)
-        if after != before:
-            raise RuntimeError(f"History differs after the return: {before} vs {after}")
-        return_roles(restore, home, owner)
+        try:
+            for role in ROLES:
+                (restore / role).mkdir(mode=0o700)
+                copy_state(base / role / "state", restore / role / "state")
+                shutil.copy2(base / role / "key.secret", restore / role / "key.secret")
+            after = heads(restore)
+            if after != before:
+                raise RuntimeError(
+                    f"History differs after the return: {before} vs {after}"
+                )
+            return_roles(restore, home, owner)
+        except BaseException:
+            shutil.rmtree(restore, ignore_errors=True)
+            raise
         restore.rmdir()
         home_fd = open_dir(home)
         try:

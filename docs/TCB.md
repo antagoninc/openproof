@@ -121,7 +121,7 @@ they did not mean to approve. See the G1 row above.
 | `crates/openproof-receiver/src/keys.rs` | 45 | ✓ | ✓ | | Private key and bounded file reads |
 | `crates/openproof-receiver/src/files.rs` | 35 | ✓ | ✓ | | New and atomically replaced private files |
 | `crates/openproof-role/src/main.rs` | 381 | ✓ | ✓ | | The role service: Unix socket, peer account check, fixed operations, opt-in trust install that refuses role-key changes |
-| `scripts/local_roles.py` | 802 | ✓ | | | Installer (runs once as root): accounts, root-owned role binary, writability checks, a copy of the owner's role files made without following links, key and state move, daemons, uninstall; `status` |
+| `scripts/local_roles.py` | 836 | ✓ | | | Installer (runs once as root): accounts, root-owned role binary, writability checks, a copy of the owner's role files made without following links, key and state move, daemons, uninstall; `status` |
 | `app/review.html`, `app/review.js` | 298 | ✓ | | | The review page: what the owner sees and approves |
 | `app/approval.js` | 122 | ✓ | | | The approval check and the passkey challenge, in the page |
 | `app/common.js` | 86 | ✓ | | | Requests and text-only rendering for the review origin's pages |
@@ -130,8 +130,8 @@ they did not mean to approve. See the G1 row above.
 | `reference/go-witness/main.go`, `archive.go`, `passkey.go`, `tlog.go` | 921 | | | ✓ | Independent Go verifier of exported histories, including owner assertions and, when given, a quorum of witness cosignatures over the whole history |
 | `scripts/verify_history.py` | 68 | | | ✓ | Wrapper that runs the independently obtained Go verifier |
 
-Totals: G1 3,521 lines, G2 1,981, G3 989. Files shared between guarantees
-count in each. **Total trusted code: 4,708 lines**, down from about 9,700 under
+Totals: G1 3,555 lines, G2 1,981, G3 989. Files shared between guarantees
+count in each. **Total trusted code: 4,742 lines**, down from about 9,700 under
 G1's condition before this change (8,370 listed, plus 1,350 for the role
 accounts).
 
@@ -173,7 +173,7 @@ tag `experiments-2026-11-08`, and the TLS role service at commit `51c0978`
    feature `experimental`, off by default.
 3. Done (8 Nov 2026). The owner app, broker, agent tools and role service
    moved from Python to Rust. The experiments left the tree.
-4. Done (10 Nov 2026), about 9,700 lines to 4,708:
+4. Done (10 Nov 2026), about 9,700 lines to 4,742:
    - The review page checks what the passkey signs and computes the challenge
      itself. It runs on the passkey's origin, which serves nothing else but
      the set-up page; the workspace has its own origin. The owner app's
@@ -192,6 +192,6 @@ tag `experiments-2026-11-08`, and the TLS role service at commit `51c0978`
      never follows a link in the owner home, and `status` runs from a
      root-owned copy.
 5. Open. The aim is under 4,000 lines. Next candidates: a smaller installer
-   (`local_roles.py`, 802 lines, the largest trusted file after the receiver)
+   (`local_roles.py`, 836 lines, the largest trusted file after the receiver)
    and the full-package export bound inside admission in
    `openproof-receiver/src/lib.rs`.

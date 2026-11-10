@@ -68,6 +68,12 @@ replace a pinned owner passkey, and the service refuses a change of role keys.
 `uninstall` also removes an install made before 10 Nov 2026, which used
 loopback TLS. `install` then sets up the Unix sockets.
 
+If `install` stops with an error, it undoes its changes. If `uninstall` stops
+with an error before it has returned the role folders, the keys and the history
+are still in the role location, and the services are stopped. In both cases,
+correct the cause and run the same command again. The home and the role
+location must be on the same volume.
+
 ## Check
 
 Run it from the root-owned copy that install made, as your own account or as
