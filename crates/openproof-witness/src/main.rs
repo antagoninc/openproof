@@ -99,6 +99,10 @@ const USAGE: &str = concat!(
     "  gate-approved HOME TRUST PROPOSAL_ID\n",
     "  gate-list HOME\n",
     "  receive DIR KEY TRUST < REQUEST\n",
+    "  tlog-request DIR KEY TRUST ORIGIN OLD_SIZE   (C2SP add-checkpoint body)\n",
+    "  tlog-inclusion DIR SEQUENCE TREE_SIZE\n",
+    "  tlog-vkey ORIGIN WITNESS_PUBLIC_KEY_HEX\n",
+    "  tlog-verify TRUST ORIGIN COSIGNERS_JSON < CHECKPOINT_AS_JSON_STRING\n",
     "  check-assertion TRUST < REQUEST\n",
     "  witness DIR KEY TRUST < RECEIPT\n",
     "  recover DIR < REQUEST\n",
@@ -287,6 +291,73 @@ fn dispatch(a: &[&str]) -> Result<serde_json::Value> {
             serde_json::to_value(stored_receipt(Path::new(state), sequence.parse()?)?)?
         }
         ["head", state] => serde_json::json!({"count":head(Path::new(state))?}),
+        ["tlog-request", state, secret, configuration, origin, old] => {
+            let body = openproof_witness::tlog::add_checkpoint_request(
+                Path::new(state),
+                &trust(configuration)?,
+                &key(secret)?,
+                origin,
+                old.parse()?,
+                now(),
+            )?;
+            serde_json::json!({"origin": origin, "request": body})
+        }
+        ["tlog-vkey", origin, public] => {
+            if !openproof_witness::tlog::valid_origin(origin) {
+                return Err("invalid origin".into());
+            }
+            let k: [u8; 32] = hex::decode(public)?.try_into().map_err(|_| "key length")?;
+            serde_json::json!({"vkey": openproof_witness::tlog::vkey(origin, 0x01, &k)})
+        }
+        ["tlog-verify", configuration, origin, cosigners] => {
+            // The log's own signature must verify under the trust's witness key;
+            // each listed cosigner (a C2SP Ed25519 cosigner vkey) is then checked.
+            use openproof_witness::tlog;
+            let t = trust(configuration)?;
+            // The signed checkpoint arrives as one JSON string.
+            let text: String = input()?;
+            if !tlog::valid_origin(origin) {
+                return Err("invalid origin".into());
+            }
+            let n = tlog::parse_note(&text)?;
+            let public: [u8; 32] = hex::decode(&t.witness)?
+                .try_into()
+                .map_err(|_| "key length")?;
+            if n.origin != *origin || !tlog::verify_note(&n, origin, &public) {
+                return Err("log signature".into());
+            }
+            let list: Vec<String> = serde_json::from_slice(&std::fs::read(cosigners)?)?;
+            // A cosignature does not commit to the cosigner's name, so one key
+            // must never count twice (c2sp.org/tlog-cosignature).
+            let mut cosigned = vec![];
+            let (mut names, mut keys) = (
+                std::collections::HashSet::new(),
+                std::collections::HashSet::new(),
+            );
+            for v in &list {
+                let (name, k) = tlog::parse_vkey(v, 0x04)?;
+                if !names.insert(name.clone()) || !keys.insert(k) {
+                    return Err("cosigner listed twice".into());
+                }
+                if let Some(time) = tlog::verify_cosignature(&n, &name, &k) {
+                    if time > now() + 300 {
+                        continue;
+                    }
+                    cosigned.push(serde_json::json!({"name": name, "time": time}));
+                }
+            }
+            serde_json::json!({"origin": n.origin, "size": n.size,
+                "root": hex::encode(n.root), "cosigned_by": cosigned})
+        }
+        ["tlog-inclusion", state, sequence, size] => {
+            use base64::{engine::general_purpose::STANDARD, Engine};
+            let proof = openproof_witness::tlog::event_inclusion(
+                Path::new(state),
+                sequence.parse()?,
+                size.parse()?,
+            )?;
+            serde_json::json!({"proof": proof.iter().map(|h| STANDARD.encode(h)).collect::<Vec<_>>()})
+        }
         ["export-unverified", state] => serde_json::to_value(export(Path::new(state), input()?)?)?,
         ["export", state, configuration] => serde_json::to_value(export_verified(
             Path::new(state),

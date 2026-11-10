@@ -305,6 +305,36 @@ impl Role {
                     Some(&m["receipt"]),
                 )
             }
+            "/v1/tlog-request" if !receiver => {
+                let m = shape(&["origin", "old"])?;
+                let origin = text(m, "origin").map_err(|_| bad())?;
+                let old = integer(m, "old").map_err(|_| bad())?;
+                self.run(
+                    &[
+                        "tlog-request".into(),
+                        st,
+                        arg(&self.key),
+                        arg(&self.trust),
+                        origin.into(),
+                        old.to_string(),
+                    ],
+                    None,
+                )
+            }
+            "/v1/tlog-inclusion" if !receiver => {
+                let m = shape(&["sequence", "size"])?;
+                let seq = integer(m, "sequence").map_err(|_| bad())?;
+                let size = integer(m, "size").map_err(|_| bad())?;
+                self.run(
+                    &[
+                        "tlog-inclusion".into(),
+                        st,
+                        seq.to_string(),
+                        size.to_string(),
+                    ],
+                    None,
+                )
+            }
             "/v1/checkpoint" if !receiver => {
                 shape(&[])?;
                 self.run(

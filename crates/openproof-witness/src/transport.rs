@@ -109,6 +109,14 @@ pub fn forward(a: &[&str], value: Option<&Value>) -> Result<Option<Value>> {
             }),
         ),
         ["document", _, id] => ("document", json!({"document": id})),
+        ["tlog-request", _, _, _, origin, old] => (
+            "tlog-request",
+            json!({"origin": origin, "old": old.parse::<u64>()?}),
+        ),
+        ["tlog-inclusion", _, seq, size] => (
+            "tlog-inclusion",
+            json!({"sequence": seq.parse::<u64>()?, "size": size.parse::<u64>()?}),
+        ),
         // The service installs with its own pinned root, never a caller-selected one.
         ["install-signed", ..] => ("install-trust", json!({"signed": need(value)?})),
         _ => return Err("Remote role administration must be performed by that operator".into()),

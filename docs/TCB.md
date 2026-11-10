@@ -49,30 +49,35 @@ owner app page it serves and the separate Go verifier.
 | `crates/openproof-witness/src/lib.rs` | 766 | ✓ | ✓ | | Trust configuration, approvals, receiver admission and replay state, receipts, witness checkpoints |
 | `crates/openproof-witness/src/gate.rs` | 585 | ✓ | | | Approval gate: proposal store, review binding, approval signing, passkey-pending approvals, approved store checked on read |
 | `crates/openproof-witness/src/passkey.rs` | 254 | ✓ | | | Owner passkey: trust field validation, WebAuthn assertion check, passkey pin |
-| `crates/openproof-witness/src/main.rs` | 468 | ✓ | ✓ | | Command dispatcher, private-key file reads, in-process calls |
-| `crates/openproof-witness/src/broker.rs` | 770 | ✓ | ✓ | | Home lock, propose, execute an approved request, witness catch-up, evidence pages, trust epochs, history export |
-| `crates/openproof-witness/src/owner_app.rs` | 808 | ✓ | | | Owner app: loopback HTTP, session, CSRF, Host and Origin checks, one-use review and assertion tokens, passkey registration checks |
+| `crates/openproof-witness/src/main.rs` | 555 | ✓ | ✓ | | Command dispatcher, private-key file reads, in-process calls |
+| `crates/openproof-witness/src/broker.rs` | 817 | ✓ | ✓ | | Home lock, propose, execute an approved request, witness catch-up, evidence pages, trust epochs, history export |
+| `crates/openproof-witness/src/owner_app.rs` | 860 | ✓ | | | Owner app: loopback HTTP, session, CSRF, Host and Origin checks, one-use review and assertion tokens, passkey registration checks |
 | `crates/openproof-witness/src/http.rs` | 202 | ✓ | ✓ | | Bounded HTTP/1.1 parsing; strict JSON (no duplicate keys or floats) |
 | `crates/openproof-witness/src/mcp.rs` | 138 | ✓ | | | Agent tools: propose and commit only, never approve |
 | `crates/openproof-witness/src/pages.rs` | 290 | | ✓ | | Bounded history pages |
 | `crates/openproof-witness/src/clock_recovery.rs` | 241 | ✓ | ✓ | | Signed-time floors and clock repair |
 | `crates/openproof-witness/src/verifier.rs` | 246 | | ✓ | | Rust history and checkpoint verification |
+| `crates/openproof-witness/src/tlog.rs` | 400 | | ✓ | | The witness history as an RFC 6962 tree: C2SP checkpoints signed by the witness key, consistency and inclusion proofs, cosignature checks (tests not counted) |
 | `crates/openproof-witness/src/zip.rs` | 72 | | | | Stored ZIP writer for the evidence download (no reader) |
-| `app/app.js`, `app/index.html` | 603 | ✓ | | | What the owner sees is what the owner approves; WebAuthn calls |
-| `reference/go-witness/main.go`, `archive.go`, `passkey.go` | 752 | | | ✓ | Independent Go verifier of exported histories, including owner assertions |
+| `app/app.js`, `app/index.html` | 1,087 | ✓ | | | What the owner sees is what the owner approves; WebAuthn calls |
+| `reference/go-witness/main.go`, `archive.go`, `passkey.go`, `tlog.go` | 932 | | | ✓ | Independent Go verifier of exported histories, including owner assertions and, when given, a quorum of witness cosignatures over the whole history |
 | `scripts/verify_history.py` | 68 | | | ✓ | Wrapper that runs the independently obtained Go verifier |
 
 Trusted only when separate role accounts are installed ([LOCAL-ROLES.md](LOCAL-ROLES.md)):
 
 | File | Lines | G1 | G2 | G3 | Role |
 |---|---:|:-:|:-:|:-:|---|
-| `crates/openproof-witness/src/serve.rs` | 372 | ✓ | ✓ | | mTLS role service (rustls, TLS 1.3, client certificate pinned by fingerprint); opt-in trust-epoch install that refuses role-key changes |
-| `crates/openproof-witness/src/transport.rs` | 158 | ✓ | ✓ | | Owner-side mTLS client with a fixed operation mapping |
+| `crates/openproof-witness/src/serve.rs` | 414 | ✓ | ✓ | | mTLS role service (rustls, TLS 1.3, client certificate pinned by fingerprint); opt-in trust-epoch install that refuses role-key changes |
+| `crates/openproof-witness/src/transport.rs` | 190 | ✓ | ✓ | | Owner-side mTLS client with a fixed operation mapping |
 | `scripts/local_roles.py` | 746 | ✓ | ✓ | | Installer: accounts, root-owned binary, writability checks, key and state move, TLS certificates, daemons, uninstall |
 
-Total trusted code: about 5,690 lines of Rust, 600 of JavaScript/HTML, 750 of
-Go and 70 of Python: about 7,110 lines. With separate role accounts, add 530
+Total trusted code: about 6,280 lines of Rust, 1,090 of JavaScript/HTML, 930
+of Go and 70 of Python: about 8,370 lines. With separate role accounts, add 600
 lines of Rust and 750 of Python (the installer, which runs once as root).
+
+`scripts/tlog_submit.py`, which pushes checkpoints to public witnesses, is not
+trusted: it only carries bytes, and the binary checks every cosignature before
+it is kept ([WITNESS-NETWORK.md](WITNESS-NETWORK.md)).
 The Rust total uses the `p256`, `base64` and `rustls` (with `ring` and
 `webpki`) crates as dependencies (not counted here).
 

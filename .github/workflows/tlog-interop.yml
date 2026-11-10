@@ -1,0 +1,43 @@
+name: C2SP witness interop
+# An OpenProof log cosigned by litewitness (filippo.io/torchwood), an independent
+# implementation of c2sp.org/tlog-witness. Separate from the main validation so
+# that an upstream change shows up here on its own.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 6 * * 1"
+permissions:
+  contents: read
+jobs:
+  interop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: "1.27.3"
+          cache: false
+      - name: Build OpenProof and the Go verifier
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal
+          rustup override set 1.92.0
+          python -m pip install -r scripts/requirements.txt
+          cargo build --workspace --locked
+          mkdir -p outputs
+          (cd reference/go-witness && GOTOOLCHAIN=local go build -o ../../outputs/openproof-go-verify .)
+      - name: Install litewitness (pinned)
+        run: GOBIN="$RUNNER_TEMP/bin" go install filippo.io/torchwood/cmd/litewitness@v0.10.0 filippo.io/torchwood/cmd/witnessctl@v0.10.0
+      - name: Cosign through litewitness and verify offline
+        run: |
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          OPENPROOF_GO_VERIFY="$PWD/outputs/openproof-go-verify" python scripts/tlog_interop.py

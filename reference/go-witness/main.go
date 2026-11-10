@@ -352,11 +352,20 @@ func main() {
 			os.Exit(1)
 		}
 	}()
-	need(len(os.Args) == 6 && (os.Args[1] == "verify" || os.Args[1] == "verify-archive"))
+	need((len(os.Args) == 6 && (os.Args[1] == "verify" || os.Args[1] == "verify-archive")) ||
+		(len(os.Args) == 10 && os.Args[1] == "verify-archive"))
 	now, e := strconv.ParseUint(os.Args[5], 10, 64)
 	need(e == nil)
 	var result map[string]any
-	if os.Args[1] == "verify-archive" {
+	if os.Args[1] == "verify-archive" && len(os.Args) == 10 {
+		// verify-archive ROOT CHECKPOINT DIR NOW NOTE ORIGIN COSIGNERS QUORUM
+		note, err := os.ReadFile(os.Args[6])
+		need(err == nil)
+		quorum, err := strconv.Atoi(os.Args[9])
+		need(err == nil)
+		co := &cosign{Note: note, Origin: os.Args[7], Cosigners: arr(read(os.Args[8])), Quorum: quorum}
+		result = verifyArchiveCosigned(os.Args[2], read(os.Args[3]), os.Args[4], now, co)
+	} else if os.Args[1] == "verify-archive" {
 		result = verifyArchive(os.Args[2], read(os.Args[3]), os.Args[4], now)
 	} else {
 		result = verify(read(os.Args[2]), read(os.Args[3]), read(os.Args[4]), now)

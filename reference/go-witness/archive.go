@@ -18,6 +18,10 @@ type chain struct {
 	Nonces  map[string]bool
 	Docs    map[string]uint64
 	Issuers map[string]bool
+	// Leaves is the RFC 6962 leaf hash of each receipt digest, in sequence
+	// order, for checking a cosigned transparency-log checkpoint.
+	Leaves    [][32]byte
+	Handovers int
 }
 
 func pageStep(t map[string]any, pinv, pv any, now uint64, c *chain) bool {
@@ -93,6 +97,7 @@ func pageStep(t map[string]any, pinv, pv any, now uint64, c *chain) bool {
 			versions[doc] = expected + 1
 		}
 		head = digest("receiver-receipt/1", r)
+		c.Leaves = append(c.Leaves, leafHash(hexbytes(head, 32)))
 		c.Count++
 	}
 
@@ -139,7 +144,21 @@ func rotationStep(hv, oldv any, root string, confirmed any, c *chain) (string, m
 	need(confirmed != nil && bytes.Equal(canonical(confirmed), canonical(r["checkpoint"])) && num(cp["count"]) == c.Count && str(cp["head"]) == c.Head)
 	return nr, nt
 }
+
+// cosign is the optional cosigned-checkpoint check: the note, its origin, the
+// trusted cosigner vkeys and how many of them must have cosigned.
+type cosign struct {
+	Note      []byte
+	Origin    string
+	Cosigners []any
+	Quorum    int
+}
+
 func verifyArchive(root string, pin any, directory string, now uint64) map[string]any {
+	return verifyArchiveCosigned(root, pin, directory, now, nil)
+}
+
+func verifyArchiveCosigned(root string, pin any, directory string, now uint64, co *cosign) map[string]any {
 	key(root)
 	m := obj(read(filepath.Join(directory, "manifest.json")))
 	fields(m, "version", "entries")
@@ -208,6 +227,7 @@ func verifyArchive(root string, pin any, directory string, now uint64) map[strin
 			rotationTime := num(obj(obj(obj(step["handover"])["old_root"])["payload"])["not_before"])
 			need(rotationTime <= now && rotationTime >= observedFloor)
 			root, current = rotationStep(step["handover"], step["old_signed_trust"], root, confirmed, &c)
+			c.Handovers++
 			observedFloor = rotationTime
 			confirmed = nil
 			finalSigned = nil
@@ -221,5 +241,12 @@ func verifyArchive(root string, pin any, directory string, now uint64) map[strin
 	if c.Gaps {
 		status = "unknown_due_to_disclosed_gap"
 	}
-	return map[string]any{"status": status, "complete_history": !c.Gaps, "count": c.Count, "root": root, "verification_scope": "root_authenticated_offline_archive_with_external_checkpoint", "physical_effects_proven": false}
+	result := map[string]any{"status": status, "complete_history": !c.Gaps, "count": c.Count, "root": root, "verification_scope": "root_authenticated_offline_archive_with_external_checkpoint", "physical_effects_proven": false}
+	if co != nil {
+		// The cosigned tree must cover exactly this history, under one witness key.
+		need(c.Handovers == 0 && uint64(len(c.Leaves)) == c.Count)
+		result["cosigned_by"] = verifyCosigned(co.Note, co.Origin, str(current["witness"]), co.Cosigners, co.Quorum, c.Count, treeRoot(c.Leaves), now)
+		result["verification_scope"] = "root_authenticated_offline_archive_with_external_checkpoint_and_independent_cosigners"
+	}
+	return result
 }

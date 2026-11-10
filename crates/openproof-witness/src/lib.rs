@@ -28,6 +28,7 @@ pub use pages::*;
 mod verifier;
 pub use verifier::*;
 mod passkey;
+pub mod tlog;
 pub use passkey::*;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub const V: &str = "openproof-witness/1";
