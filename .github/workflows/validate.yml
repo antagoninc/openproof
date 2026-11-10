@@ -3,6 +3,10 @@ on:
   pull_request:
   push:
   workflow_dispatch:
+  # Weekly, so a new RustSec advisory shows up on a known day and not on the
+  # next unrelated push. Monday 06:17 UTC.
+  schedule:
+    - cron: "17 6 * * 1"
 permissions:
   contents: read
 jobs:
