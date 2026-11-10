@@ -34,6 +34,15 @@ def approval_digest(request):
     return hashlib.sha256(preimage).hexdigest()
 
 
+def page_challenge(response):
+    """The passkey challenge as the review page derives it: from the signed
+    approval, never from a challenge the server picks (app/approval.js)."""
+    digest = approval_digest({"approval": {"payload": response["approval"]}})
+    assert digest == response["approval_sha256"], response
+    assert "challenge" not in response, response
+    return b64encode(bytes.fromhex(digest))
+
+
 class SoftAuthenticator:
     """A software stand-in for a platform passkey, for tests only."""
 
@@ -84,7 +93,7 @@ class PasskeyTests(unittest.TestCase):
         enable(self.h)
         self.o = OwnerClient(self.h)
         global ORIGIN
-        ORIGIN = self.o.origin
+        ORIGIN = self.o.review_origin
         self.device = SoftAuthenticator()
 
     def tearDown(self):
@@ -161,7 +170,7 @@ class PasskeyTests(unittest.TestCase):
             dict(
                 public_key=point.hex(),
                 rp_id="localhost",
-                origin=self.o.origin,
+                origin=self.o.review_origin,
                 from_sequence=1,
             ),
         )
@@ -199,10 +208,19 @@ class PasskeyTests(unittest.TestCase):
         identity, challenge = self.approve()
         self.assertEqual(challenge["status"], "passkey_required")
         self.assertEqual(challenge["credential_id"], b64encode(b"credential-1"))
+        # The approval the page checks is exactly the reviewed proposal.
+        approval = challenge["approval"]
+        self.assertEqual(
+            (approval["document"], approval["expected_version"]), ("report", 0)
+        )
+        self.assertEqual(
+            approval["content_sha256"],
+            hashlib.sha256(b"passkey approved text").hexdigest(),
+        )
         self.assertEqual(self.gate_state(identity), "awaiting_passkey")
         with self.assertRaises(FileNotFoundError):
             self.o.broker.commit(identity)
-        assertion = self.device.assert_(challenge["challenge"])
+        assertion = self.device.assert_(page_challenge(challenge))
         result = self.o.approve_passkey(
             identity, challenge["assertion_token"], assertion
         )
@@ -210,7 +228,7 @@ class PasskeyTests(unittest.TestCase):
         stored = self.o.broker.request(identity)
         self.assertEqual(stored["owner_assertion"], assertion)
         self.assertEqual(
-            b64encode(bytes.fromhex(approval_digest(stored))), challenge["challenge"]
+            b64encode(bytes.fromhex(approval_digest(stored))), page_challenge(challenge)
         )
         committed = self.o.broker.commit(identity)
         self.assertEqual(
@@ -230,7 +248,7 @@ class PasskeyTests(unittest.TestCase):
             self.o.approve_passkey(
                 identity,
                 challenge["assertion_token"],
-                self.device.assert_(challenge["challenge"]),
+                self.device.assert_(page_challenge(challenge)),
             )
             ids.append(identity)
         first = self.o.broker.commit(ids[0])
@@ -261,7 +279,7 @@ class PasskeyTests(unittest.TestCase):
             again = self.o.approve(identity, review["review_token"])
             with self.assertRaises(ValueError):
                 self.o.approve_passkey(
-                    identity, again["assertion_token"], make(again["challenge"])
+                    identity, again["assertion_token"], make(page_challenge(again))
                 )
             self.assertEqual(self.gate_state(identity), "awaiting_passkey")
         # A process that can read the authority key signs a request without a passkey.
@@ -281,7 +299,7 @@ class PasskeyTests(unittest.TestCase):
         # An assertion copied from a different approval does not match this digest.
         other, other_challenge = self.approve("other text", 0)
         copied = dict(
-            forged, owner_assertion=self.device.assert_(other_challenge["challenge"])
+            forged, owner_assertion=self.device.assert_(page_challenge(other_challenge))
         )
         with self.assertRaisesRegex(RuntimeError, "challenge"):
             self.receive(copied)
@@ -291,7 +309,7 @@ class PasskeyTests(unittest.TestCase):
             self.o.approve_passkey(
                 identity,
                 again["assertion_token"],
-                self.device.assert_(other_challenge["challenge"]),
+                self.device.assert_(page_challenge(other_challenge)),
             )
         self.assertEqual(call(["head", self.h / "receiver/state"])["count"], 0)
         with self.assertRaises(RuntimeError):
@@ -323,7 +341,7 @@ class PasskeyTests(unittest.TestCase):
         self.o.approve_passkey(
             identity,
             challenge["assertion_token"],
-            self.device.assert_(challenge["challenge"]),
+            self.device.assert_(page_challenge(challenge)),
         )
         result = self.o.broker.commit(identity)
         self.assertEqual(result["verification_status"], "local_consistency_verified")
@@ -343,9 +361,30 @@ class PasskeyTests(unittest.TestCase):
         self.assertNotEqual(subprocess.run(cmd, capture_output=True).returncode, 0)
 
     def test_http_routes_use_localhost_origin(self):
+        self.assertTrue(self.o.review_origin.startswith("http://localhost:"))
         self.assertTrue(self.o.origin.startswith("http://localhost:"))
+        self.assertNotEqual(self.o.origin, self.o.review_origin)
+        # Each origin serves only its own pages and requests.
+        for origin, path in [
+            (self.o.origin, "/review"),
+            (self.o.origin, "/setup"),
+            (self.o.origin, "/review.js"),
+            (self.o.review_origin, "/"),
+            (self.o.review_origin, "/app.js"),
+            (self.o.review_origin, "/api/status"),
+        ]:
+            self.assertEqual(self.o.request("GET", path, origin=origin)[0], 404, path)
+        for origin, path in [(self.o.review_origin, "/review"), (self.o.origin, "/")]:
+            self.assertEqual(self.o.request("GET", path, origin=origin)[0], 200, path)
+        status, _, _ = self.o.request(
+            "POST",
+            "/api/approve",
+            "{}",
+            {"Origin": self.o.origin, "Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 404)
         post = self.o.post
-        ip = "127.0.0.1:" + str(self.o.port)
+        ip = "127.0.0.1:" + str(self.o.review_port)
         self.assertEqual(post("passkey/register/begin", {}, {"Host": ip})[0], 403)
         code, begin = post("passkey/register/begin", {})
         self.assertEqual(code, 200)
@@ -372,8 +411,20 @@ class PasskeyTests(unittest.TestCase):
             "approve",
             {"id": value["proposal_id"], "review_token": review["review_token"]},
         )
+        # An assertion made on the workspace origin is refused: only pages on
+        # the review origin can produce an accepted one.
         body["assertion_token"] = challenge["assertion_token"]
-        body["assertion"] = self.device.assert_(challenge["challenge"])
+        body["assertion"] = self.device.assert_(
+            page_challenge(challenge), origin=self.o.origin
+        )
+        self.assertEqual(post("approve/passkey", body)[0], 409)
+        review = post("review", {"id": value["proposal_id"]})[1]
+        code, challenge = post(
+            "approve",
+            {"id": value["proposal_id"], "review_token": review["review_token"]},
+        )
+        body["assertion_token"] = challenge["assertion_token"]
+        body["assertion"] = self.device.assert_(page_challenge(challenge))
         self.assertEqual(
             post("approve/passkey", body),
             (200, {"status": "approved", "id": value["proposal_id"]}),
@@ -389,7 +440,7 @@ class PasskeyTests(unittest.TestCase):
                 "--home",
                 str(self.h),
                 "--port",
-                str(self.o.port + 1),
+                str(self.o.review_port + 1),
             ],
             capture_output=True,
             text=True,
@@ -397,7 +448,7 @@ class PasskeyTests(unittest.TestCase):
         )
         self.assertIn("registered for", bad.stderr)
         self.o = OwnerClient(self.h)
-        self.assertEqual(self.o.origin, ORIGIN)
+        self.assertEqual(self.o.review_origin, ORIGIN)
 
 
 if __name__ == "__main__":

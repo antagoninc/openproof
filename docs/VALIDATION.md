@@ -11,7 +11,7 @@ Recorded on **2026-11-08**, before GitHub import. This is a sanitized summary of
 | Differential cases | 224 evidence + 94 trust + 202 witness cases passed |
 | Browser workflow | Desktop/mobile proposal, exact review, approval, execution and retry passed |
 | Linux isolated-role pilot | 11 assertions passed |
-| mTLS integration | Missing/unlisted identities and wrong-role operations rejected; service-backed owner execution/recovery/export passed |
+| mTLS integration (v0.9 milestone; replaced by Unix sockets on 10 Nov 2026) | Missing/unlisted identities and wrong-role operations rejected; service-backed owner execution/recovery/export passed |
 | Fault handling | Interrupted handover process, damaged database, simulated evidence-write failure, altered/missing/reordered evidence and incorrect trust/checkpoint tested |
 | Bounded fuzzing | 4,390,141 executions across five campaigns, no crash artifacts; only 78 stateful sequences |
 | Linux repeat build | Byte-identical witness executable using the same host and pinned image, with build cache disabled on repeat |

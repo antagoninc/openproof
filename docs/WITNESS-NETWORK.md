@@ -21,7 +21,7 @@ history is also a transparency log that other parties cosign:
   proof to the configured witnesses ([c2sp.org/tlog-witness](https://c2sp.org/tlog-witness)).
   Each witness checks that the new tree extends the last one it cosigned, then
   returns an Ed25519 cosignature ([c2sp.org/tlog-cosignature](https://c2sp.org/tlog-cosignature)).
-- The binary checks every cosignature before the submitter keeps it. A
+- `openproof-tool` checks every cosignature before the submitter keeps it. A
   checkpoint is kept only when it meets the configured quorum.
 - One key never counts twice, under any name: a cosignature does not commit to
   the cosigner's name. Small-order keys are refused.
@@ -56,7 +56,7 @@ It does not show:
 
 1. Choose an origin you control that will never change, for example
    `openproof.example.org/owners/release-desk`. Do not start it with `OpenProof`.
-2. Get the log's verifier key: `openproof-witness tlog-vkey ORIGIN WITNESS_KEY_HEX`,
+2. Get the log's verifier key: `openproof-tool tlog-vkey ORIGIN WITNESS_KEY_HEX`,
    with the `witness` key from `trust.json`.
 3. Ask each witness operator to add the origin and that key. For the public
    witness network, see [witness-network.org](https://witness-network.org/participate).

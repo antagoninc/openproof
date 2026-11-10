@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>OpenProof · Review</title>
+    <link rel="stylesheet" href="/base.css" />
+    <!-- This page loads only its own script and the two shared modules. -->
+    <script type="module" src="/review.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="1" y="1" width="30" height="30" rx="9" />
+          <path d="M9 16.5l4.5 4.5L23 11.5" />
+        </svg>
+        <span class="brand-name">OpenProof</span>
+        <span class="brand-role">Review</span>
+      </div>
+      <a class="ghost button-link" data-workspace id="back">Back to workspace</a>
+    </header>
+
+    <div id="message" class="toast quiet" role="status" aria-live="polite"></div>
+
+    <main class="page">
+      <section class="card sheet" aria-labelledby="review-title">
+        <div class="sheet-head">
+          <div>
+            <span class="kicker">Step 2 of 3 · Review and approve</span>
+            <h1 id="review-title">Review the exact change</h1>
+          </div>
+        </div>
+        <p id="loading" class="sub">Loading the proposal…</p>
+        <div id="review" class="sheet-body" hidden>
+          <div class="review-meta">
+            <div><span class="fine">Document</span><strong id="review-doc"></strong></div>
+            <div><span class="fine">Version</span><strong id="review-target"></strong></div>
+            <div><span class="fine">Change</span><strong id="review-delta"></strong></div>
+          </div>
+          <div class="tabs" role="tablist" aria-label="Review view">
+            <button type="button" role="tab" id="tab-full" aria-selected="true">Full new text</button>
+            <button type="button" role="tab" id="tab-diff" aria-selected="false">Changes</button>
+          </div>
+          <pre id="review-content" class="fulltext" role="tabpanel" aria-labelledby="tab-full"></pre>
+          <div id="review-diff" class="diff" role="tabpanel" aria-labelledby="tab-diff" hidden></div>
+          <div class="digest-box">
+            <span class="fine">Content SHA-256, computed in this page</span>
+            <code id="review-digest"></code>
+            <span class="fine" id="passkey-note" hidden
+              >Passkey challenge, computed in this page from the approval it checked</span
+            >
+            <code id="review-approval" hidden></code>
+          </div>
+          <label class="check"
+            ><input type="checkbox" id="confirm" /><span
+              >I reviewed this exact content and document version.</span
+            ></label
+          >
+          <div class="sheet-actions">
+            <a class="ghost button-link" data-workspace id="cancel">Cancel</a>
+            <button id="approve" class="primary" type="button" disabled>
+              Approve this change
+            </button>
+          </div>
+          <p class="fine center">
+            Approval does not execute anything. You choose when to execute.
+          </p>
+        </div>
+        <p id="again" class="sub" hidden>
+          <a href="" id="again-link">Review this change again</a>
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

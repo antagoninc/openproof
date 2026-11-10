@@ -5,8 +5,9 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <title>OpenProof · Owner</title>
+    <link rel="stylesheet" href="/base.css" />
     <link rel="stylesheet" href="/app.css" />
-    <script src="/app.js" defer></script>
+    <script type="module" src="/app.js"></script>
   </head>
   <body>
     <a class="skip" href="#queue">Skip to your actions</a>
@@ -105,7 +106,7 @@
           </p>
           <dl id="health-list" class="kv" hidden></dl>
           <div id="recovery-items" class="mini-items"></div>
-          <p id="certificate-summary" class="fine"></p>
+          <p id="services-summary" class="fine"></p>
           <button id="recovery-refresh" class="secondary block" type="button">
             Check recovery
           </button>
@@ -201,47 +202,5 @@
       </form>
     </dialog>
 
-    <dialog id="review" class="wide" aria-labelledby="review-title">
-      <div class="sheet-head">
-        <div>
-          <span class="kicker">Step 2 of 3 · Review and approve</span>
-          <h2 id="review-title">Review the exact change</h2>
-        </div>
-        <button class="icon-btn" type="button" id="cancel-x" aria-label="Close">
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
-        </button>
-      </div>
-      <div class="review-meta">
-        <div><span class="fine">Document</span><strong id="review-doc"></strong></div>
-        <div><span class="fine">Version</span><strong id="review-target"></strong></div>
-        <div><span class="fine">Change</span><strong id="review-delta"></strong></div>
-      </div>
-      <div class="tabs" role="tablist" aria-label="Review view">
-        <button type="button" role="tab" id="tab-diff" aria-selected="true">Changes</button>
-        <button type="button" role="tab" id="tab-full" aria-selected="false">Full new text</button>
-      </div>
-      <div id="review-diff" class="diff" role="tabpanel" aria-labelledby="tab-diff"></div>
-      <pre id="review-content" class="fulltext" role="tabpanel" aria-labelledby="tab-full" hidden></pre>
-      <div class="digest-box">
-        <span class="fine">Content SHA-256</span>
-        <code id="review-digest"></code>
-        <span class="fine" id="passkey-note" hidden>Passkey challenge (approval SHA-256)</span>
-        <code id="review-approval" hidden></code>
-      </div>
-      <label class="check"
-        ><input type="checkbox" id="confirm" /><span
-          >I reviewed this exact content and document version.</span
-        ></label
-      >
-      <div class="sheet-actions">
-        <button id="cancel" class="ghost" type="button">Cancel</button>
-        <button id="approve" class="primary" type="button" disabled>
-          Approve this change
-        </button>
-      </div>
-      <p class="fine center">
-        Approval does not execute anything. You choose when to execute.
-      </p>
-    </dialog>
   </body>
 </html>

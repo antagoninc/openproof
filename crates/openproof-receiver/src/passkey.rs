@@ -217,7 +217,7 @@ pub fn check_owner_assertion(q: &Request, t: &Trust, sequence: u64) -> Result<()
 }
 
 /// Receiver rule: with a passkey in force every new admission needs an assertion.
-pub(crate) fn admit_owner_assertion(q: &Request, t: &Trust, next_sequence: u64) -> Result<()> {
+pub fn admit_owner_assertion(q: &Request, t: &Trust, next_sequence: u64) -> Result<()> {
     if let Some(k) = &t.owner_passkey {
         check(
             next_sequence >= k.from_sequence,
@@ -243,7 +243,8 @@ pub fn check_request_assertion(q: &Request, t: &Trust) -> Result<()> {
 
 /// Once a state has installed a trust with an owner passkey, every later trust must
 /// keep the identical passkey. A stolen root key cannot silently remove or replace it.
-pub(crate) fn pin_owner_passkey(tx: &rusqlite::Transaction<'_>, t: &Trust) -> Result<()> {
+#[doc(hidden)]
+pub fn pin_owner_passkey(tx: &rusqlite::Transaction<'_>, t: &Trust) -> Result<()> {
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS owner_passkey_pin(id INTEGER PRIMARY KEY,record TEXT NOT NULL);",
     )?;
@@ -643,17 +644,20 @@ mod tests {
         assert!(apply(&receiver, &signed, &late, &rk, 100).is_err());
         let r2 = apply(&receiver, &signed, &keyed, &rk, 100).unwrap();
         let cp = witness(&witness_state, &r2, &keyed, &wk, 100).unwrap();
-        let p = export(&receiver, cp.clone()).unwrap();
+        let p = export(&receiver, cp).unwrap();
         assert!(p.requests[0].owner_assertion.is_none());
-        assess(&p, &keyed, &cp, 100).unwrap();
-        let mut stripped = p.clone();
-        stripped.requests[1].owner_assertion = None;
-        assert!(assess(&stripped, &keyed, &cp, 100).is_err());
-        let mut moved = p.clone();
-        moved.requests[0].owner_assertion = moved.requests[1].owner_assertion.clone();
-        assert!(assess(&moved, &keyed, &cp, 100).is_err());
-        assert!(assess(&p, &plain, &cp, 100).is_err());
+        assert!(p.requests[1].owner_assertion.is_some());
+        // The verifier side of this history: openproof-witness tests.rs,
+        // assessment_requires_owner_assertions_after_enrollment.
 
+        // A trust update pins the same passkey, as `install` does.
+        let install = |path: &Path, t: &Trust, time: u64| -> Result<()> {
+            let mut c = connect(path)?;
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            pin(&tx, t, time)?;
+            tx.commit()?;
+            Ok(())
+        };
         let mut dropped = trust(None);
         dropped.epoch = 3;
         let e = install(&receiver, &dropped, 100).unwrap_err();

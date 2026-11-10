@@ -1,5 +1,5 @@
-//! Command-line entry points for the experimental planned key handover and storage
-//! pilot. Built only with `--features experimental`; not part of the trusted code.
+//! Commands for the experimental planned key handover and storage pilot. Built
+//! only with `--features experimental`; not part of the trusted code.
 use super::*;
 /// Experimental commands, present only with `--features experimental`.
 pub const EXPERIMENTAL_USAGE: &str = concat!(

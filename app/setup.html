@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>OpenProof · Passkey</title>
+    <link rel="stylesheet" href="/base.css" />
+    <!-- This page loads only its own script and the shared module. -->
+    <script type="module" src="/setup.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="1" y="1" width="30" height="30" rx="9" />
+          <path d="M9 16.5l4.5 4.5L23 11.5" />
+        </svg>
+        <span class="brand-name">OpenProof</span>
+        <span class="brand-role">Passkey</span>
+      </div>
+      <a class="ghost button-link" data-workspace>Back to workspace</a>
+    </header>
+
+    <div id="message" class="toast quiet" role="status" aria-live="polite"></div>
+
+    <main class="page">
+      <section class="card sheet" aria-labelledby="setup-title">
+        <div class="sheet-head">
+          <div>
+            <span class="kicker">Owner passkey</span>
+            <h1 id="setup-title">Set up your passkey</h1>
+          </div>
+        </div>
+        <p class="sub">
+          After set-up, every approval needs a fresh, user-verified gesture on
+          this passkey: your fingerprint, face or device PIN. The receiver
+          refuses any change without it. The passkey is bound to this exact
+          address, so keep opening the app at it.
+        </p>
+        <p class="fine">
+          Do this once, on a computer you trust right now. The receiver keeps
+          this passkey: a later trust update cannot remove or replace it.
+        </p>
+        <div class="sheet-actions">
+          <a class="ghost button-link" data-workspace>Cancel</a>
+          <button id="setup" class="primary" type="button" disabled>
+            Set up passkey
+          </button>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

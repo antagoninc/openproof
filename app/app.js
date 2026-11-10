@@ -1,40 +1,16 @@
-"use strict";
-// OpenProof owner app. Every value from the server is rendered as text, never
-// as HTML. Approval and execution stay two separate owner decisions.
-let csrf = "",
-  review = null,
-  busy = false,
+// OpenProof owner workspace: the dashboard. Every value from the server is
+// rendered as text, never as HTML. Approval and execution stay two separate
+// owner decisions.
+//
+// This page is not trusted for what the owner approves: the review happens on
+// its own page (review.js), and passkey set-up on another (setup.js). No code
+// from this file runs on either. See docs/TCB.md.
+import { $, el, say, api, startSession } from "./common.js";
+import { sha256Text } from "./approval.js";
+
+let busy = false,
   status = null,
-  toastTimer = 0;
-const $ = (id) => document.getElementById(id);
-
-function say(text, tone) {
-  const t = $("message");
-  t.textContent = text;
-  t.dataset.tone = tone || "";
-  t.classList.remove("quiet");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(
-    () => t.classList.add("quiet"),
-    tone === "bad" ? 12000 : 7000,
-  );
-}
-
-async function api(path, body) {
-  const options = { credentials: "same-origin", cache: "no-store" };
-  if (body !== undefined) {
-    options.method = "POST";
-    options.headers = {
-      "Content-Type": "application/json",
-      "X-OpenProof-CSRF": csrf,
-    };
-    options.body = JSON.stringify(body);
-  }
-  const response = await fetch("/api/" + path, options);
-  const data = await response.json();
-  if (!response.ok) throw Error(data.error || "Operation unavailable");
-  return data;
-}
+  reviewOrigin = "";
 
 // One owner operation at a time. The button that started it shows progress.
 async function action(fn, button) {
@@ -57,58 +33,17 @@ async function action(fn, button) {
   }
 }
 
-function el(tag, text, cls) {
-  const e = document.createElement(tag);
-  if (text !== undefined && text !== null) e.textContent = text;
-  if (cls) e.className = cls;
-  return e;
-}
 function tone(e, value) {
   if (value) e.dataset.tone = value;
   return e;
 }
 
-function fromBase64url(text) {
-  const s = text.replace(/-/g, "+").replace(/_/g, "/");
-  const binary = atob(s + "===".slice((s.length + 3) % 4));
-  return Uint8Array.from(binary, (c) => c.charCodeAt(0));
-}
-function toBase64url(buffer) {
-  let binary = "";
-  for (const b of new Uint8Array(buffer)) binary += String.fromCharCode(b);
-  return btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-async function sha256Hex(text) {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(text),
-  );
-  return Array.from(new Uint8Array(digest), (b) =>
-    b.toString(16).padStart(2, "0"),
-  ).join("");
-}
-
-async function passkeyAssertion(challenge) {
-  const publicKey = {
-    challenge: fromBase64url(challenge.challenge),
-    rpId: challenge.rp_id,
-    userVerification: "required",
-    timeout: 120000,
-  };
-  if (challenge.credential_id)
-    publicKey.allowCredentials = [
-      { type: "public-key", id: fromBase64url(challenge.credential_id) },
-    ];
-  const credential = await navigator.credentials.get({ publicKey });
-  const response = credential.response;
-  return {
-    authenticator_data: toBase64url(response.authenticatorData),
-    client_data_json: toBase64url(response.clientDataJSON),
-    signature: toBase64url(response.signature),
-  };
+/** Open the review page for one proposal. An expired approval is proposed again first. */
+async function openReview(item) {
+  let id = item.id;
+  if (item.stage === "Approval expired")
+    id = (await api("repropose", { id })).proposal_id;
+  location.assign(reviewOrigin + "/review#" + id);
 }
 
 // ---------------------------------------------------------------- actions
@@ -426,7 +361,7 @@ async function updateDigest() {
   $("content-size").textContent =
     bytes.toLocaleString() + (bytes === 1 ? " byte" : " bytes");
   try {
-    $("content-digest").textContent = text ? await sha256Hex(text) : "—";
+    $("content-digest").textContent = text ? await sha256Text(text) : "—";
   } catch {
     $("content-digest").textContent = "unavailable";
   }
@@ -471,184 +406,6 @@ $("proposal-form").onsubmit = (e) => {
 for (const b of document.querySelectorAll("[data-close]"))
   b.onclick = () => $(b.dataset.close).close();
 
-// ---------------------------------------------------------------- review
-
-// Line diff by longest common subsequence. Display only: the approval binds
-// the proposal text, never this rendering.
-function lineDiff(before, after) {
-  const a = before.split("\n"),
-    b = after.split("\n");
-  const n = a.length,
-    m = b.length;
-  if (n * m > 4_000_000) return null;
-  const w = m + 1,
-    t = new Uint32Array((n + 1) * w);
-  for (let i = n - 1; i >= 0; i--)
-    for (let j = m - 1; j >= 0; j--)
-      t[i * w + j] =
-        a[i] === b[j]
-          ? t[(i + 1) * w + j + 1] + 1
-          : Math.max(t[(i + 1) * w + j], t[i * w + j + 1]);
-  const out = [];
-  let i = 0,
-    j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      out.push(["same", a[i]]);
-      i++;
-      j++;
-    } else if (t[(i + 1) * w + j] >= t[i * w + j + 1]) out.push(["del", a[i++]]);
-    else out.push(["add", b[j++]]);
-  }
-  while (i < n) out.push(["del", a[i++]]);
-  while (j < m) out.push(["add", b[j++]]);
-  return out;
-}
-
-function renderDiff(r) {
-  const box = $("review-diff");
-  const proposed = r.proposal.content;
-  const lines = [];
-  let ops;
-  if (!r.current) {
-    lines.push(
-      el(
-        "div",
-        "The receiver did not return the current text, so changes cannot be shown. Review the full new text.",
-        "diff-note",
-      ),
-    );
-    ops = proposed.split("\n").map((l) => ["same", l]);
-    $("review-delta").textContent = "Current text unavailable";
-  } else if (r.current.content === null) {
-    lines.push(el("div", "New document. Every line is added.", "diff-note"));
-    ops = proposed.split("\n").map((l) => ["add", l]);
-    $("review-delta").textContent = "New document";
-  } else {
-    ops = lineDiff(r.current.content, proposed);
-    if (!ops) {
-      lines.push(
-        el("div", "Too large to compare line by line. Review the full new text.", "diff-note"),
-      );
-      ops = proposed.split("\n").map((l) => ["same", l]);
-      $("review-delta").textContent = "Large change";
-    } else {
-      const add = ops.filter((o) => o[0] === "add").length,
-        del = ops.filter((o) => o[0] === "del").length;
-      $("review-delta").textContent =
-        add || del ? "+" + add + " / −" + del + " lines" : "No text change";
-      if (r.current.version !== r.proposal.expected_version)
-        lines.push(
-          el(
-            "div",
-            "The receiver is now at version " +
-              r.current.version +
-              ", not " +
-              r.proposal.expected_version +
-              ". The receiver will refuse this change.",
-            "diff-note",
-          ),
-        );
-    }
-  }
-  for (const [op, text] of ops) {
-    const line = el("div", null, "diff-line");
-    line.dataset.op = op;
-    line.append(
-      el("span", op === "add" ? "+" : op === "del" ? "−" : ""),
-      el("span", text || " "),
-    );
-    lines.push(line);
-  }
-  box.replaceChildren(...lines);
-}
-
-function showTab(which) {
-  const diff = which === "diff";
-  $("tab-diff").setAttribute("aria-selected", String(diff));
-  $("tab-full").setAttribute("aria-selected", String(!diff));
-  $("review-diff").hidden = !diff;
-  $("review-content").hidden = diff;
-}
-$("tab-diff").onclick = () => showTab("diff");
-$("tab-full").onclick = () => showTab("full");
-
-function showPasskeyChallenge(digest) {
-  $("review-approval").textContent = digest;
-  $("review-approval").hidden = !digest;
-  $("passkey-note").hidden = !digest;
-}
-
-async function openReview(item) {
-  let id = item.id;
-  if (item.stage === "Approval expired")
-    id = (await api("repropose", { id })).proposal_id;
-  const r = await api("review", { id });
-  r.id = id;
-  review = r;
-  const p = r.proposal;
-  $("review-doc").textContent = p.document;
-  $("review-target").textContent =
-    "v" + p.expected_version + " → v" + (p.expected_version + 1);
-  $("review-content").textContent = p.content;
-  $("review-digest").textContent = r.content_sha256;
-  renderDiff(r);
-  showTab("diff");
-  showPasskeyChallenge("");
-  $("confirm").checked = false;
-  $("approve").disabled = true;
-  $("approve").textContent = "Approve this change";
-  $("review").showModal();
-  $("confirm").focus();
-}
-function closeReview() {
-  $("review").close();
-}
-$("review").addEventListener("close", () => {
-  review = null;
-  showPasskeyChallenge("");
-});
-$("cancel").onclick = closeReview;
-$("cancel-x").onclick = closeReview;
-$("confirm").onchange = () => {
-  $("approve").disabled = !$("confirm").checked;
-};
-$("approve").onclick = () =>
-  action(async () => {
-    if (!review || !$("confirm").checked) return;
-    const r = review;
-    review = null;
-    $("approve").disabled = true;
-    try {
-      const result = await api("approve", {
-        id: r.id,
-        review_token: r.review_token,
-      });
-      if (result.status === "passkey_required") {
-        // The sheet keeps showing the exact content while the passkey prompt is open.
-        showPasskeyChallenge(result.approval_sha256);
-        say("Confirm with your passkey to approve this exact change.");
-        let assertion;
-        try {
-          assertion = await passkeyAssertion(result);
-        } catch {
-          throw Error(
-            "Passkey approval was not completed. Nothing was approved. Review the change again.",
-          );
-        }
-        await api("approve/passkey", {
-          id: r.id,
-          assertion_token: result.assertion_token,
-          assertion,
-        });
-      }
-      say("Approved. Select “Execute approved action” when you are ready.");
-    } finally {
-      $("review").close();
-      await refresh();
-    }
-  }, $("approve"));
-
 // ---------------------------------------------------------------- rail
 
 $("refresh").onclick = () =>
@@ -664,46 +421,7 @@ $("paging").onclick = () =>
     say("Incremental evidence is on.");
   }, $("paging"));
 
-$("passkey-setup").onclick = () =>
-  action(async () => {
-    if (!window.PublicKeyCredential)
-      throw Error("This browser does not support passkeys.");
-    const begin = await api("passkey/register/begin", {});
-    const credential = await navigator.credentials.create({
-      publicKey: {
-        rp: { id: begin.rp_id, name: "OpenProof" },
-        user: {
-          id: fromBase64url(begin.user_id),
-          name: begin.user_name,
-          displayName: "OpenProof owner",
-        },
-        challenge: fromBase64url(begin.challenge),
-        pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-        authenticatorSelection: {
-          userVerification: "required",
-          residentKey: "preferred",
-        },
-        attestation: "none",
-        timeout: 120000,
-      },
-    });
-    const response = credential.response;
-    if (response.getPublicKeyAlgorithm() !== -7)
-      throw Error("The passkey must use ES256 (P-256).");
-    const result = await api("passkey/register/finish", {
-      credential_id: toBase64url(credential.rawId),
-      client_data_json: toBase64url(response.clientDataJSON),
-      authenticator_data: toBase64url(response.getAuthenticatorData()),
-      public_key: toBase64url(response.getPublicKey()),
-      algorithm: -7,
-    });
-    say(
-      "Passkey set up (trust epoch " +
-        result.installed_epoch +
-        "). Every approval now needs your passkey.",
-    );
-    await refresh();
-  }, $("passkey-setup"));
+$("passkey-setup").onclick = () => location.assign(reviewOrigin + "/setup");
 
 $("export").onclick = () =>
   action(async () => {
@@ -731,14 +449,6 @@ const recoveryLabels = {
   expired_uncommitted: "Expired, no commit found",
   unconfirmed: "Outcome unconfirmed",
 };
-const certificateLabels = {
-  valid: "Valid",
-  expiring: "Renewal due soon",
-  expired: "Expired",
-  not_yet_valid: "Not yet valid",
-  unreadable: "Could not inspect",
-};
-
 function kv(list, pairs) {
   list.replaceChildren();
   for (const [k, v] of pairs) list.append(el("dt", k), el("dd", v));
@@ -796,23 +506,10 @@ async function recoveryRefresh() {
       return box;
     }),
   );
-  $("certificate-summary").textContent =
-    r.tls.status === "local_roles_no_tls"
-      ? "Local roles use no TLS. Remote certificates are their operators’ job."
-      : r.tls.status === "local_role_services"
-        ? "The receiver and witness run as separate role services. Check their certificates with local_roles.py status."
-        : r.tls.certificates
-            .map(
-              (c) =>
-                c.role +
-                " " +
-                (c.kind === "client" ? "client" : "trust") +
-                " certificate: " +
-                certificateLabels[c.status] +
-                (c.not_after ? " · expires " + c.not_after : ""),
-            )
-            .join(" | ") ||
-          "Certificate configuration needs operator attention.";
+  $("services-summary").textContent =
+    r.services === "separate_accounts"
+      ? "The receiver and the witness run under their own accounts. Check them with local_roles.py status."
+      : "The receiver and the witness run in this account. See LOCAL-ROLES.md to separate them.";
 }
 $("recovery-refresh").onclick = () =>
   action(async () => {
@@ -822,19 +519,19 @@ $("recovery-refresh").onclick = () =>
 
 // ---------------------------------------------------------------- start
 
+// The fragment holds the launcher's session token, or a note from another page.
+const NOTES = {
+  approved: "Approved. Select “Execute approved action” when you are ready.",
+  passkey: "Passkey set up. Every approval now needs your passkey.",
+};
 action(async () => {
-  const token = location.hash.slice(1);
+  const fragment = location.hash.slice(1);
   history.replaceState(null, "", "/");
-  let session;
-  try {
-    session = token ? await api("session", { token }) : await api("session");
-  } catch {
-    throw Error(
-      "No owner session. Open the app with the link the launcher printed.",
-    );
-  }
-  csrf = session.csrf;
+  reviewOrigin = (await startSession(NOTES[fragment] ? "" : fragment)).review;
   await refresh();
-  say("Your workspace is ready. Approval and execution are separate steps.");
+  say(
+    NOTES[fragment] ||
+      "Your workspace is ready. Approval and execution are separate steps.",
+  );
   await quietHealth();
 });

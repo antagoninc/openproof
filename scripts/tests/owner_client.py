@@ -8,6 +8,10 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 from witness_workflow import BINARY, Broker, ref
 
+# Requests that only the review origin (the passkey's) serves.
+REVIEW = {"review", "approve", "approve/passkey", "passkey/register/begin"}
+REVIEW.add("passkey/register/finish")
+
 
 class OwnerClient:
     def __init__(self, home, port=0, session_name="session.json"):
@@ -36,9 +40,11 @@ class OwnerClient:
             if self.process.poll() is not None:
                 raise RuntimeError(self.process.stderr.read().decode())
             time.sleep(0.05)
-        url = json.loads(self.session_file.read_text())["url"]
-        self.origin, self.token = url.split("/#")
+        session = json.loads(self.session_file.read_text())
+        self.origin, self.token = session["url"].split("/#")
         self.port = int(self.origin.rsplit(":", 1)[1])
+        self.review_origin = session["review_origin"]
+        self.review_port = int(self.review_origin.rsplit(":", 1)[1])
         status, data = self.post("session", {"token": self.token}, auth=False)
         if status != 200:
             raise RuntimeError(data)
@@ -49,9 +55,11 @@ class OwnerClient:
         self.process.wait()
         self.process.stderr.close()
 
-    def request(self, method, path, body=None, headers=None):
-        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=60)
-        h = {"Host": self.origin.removeprefix("http://")}
+    def request(self, method, path, body=None, headers=None, origin=None):
+        origin = origin or self.origin
+        port = int(origin.rsplit(":", 1)[1])
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+        h = {"Host": origin.removeprefix("http://")}
         h.update(headers or {})
         c.request(method, path, body, h)
         r = c.getresponse()
@@ -60,13 +68,14 @@ class OwnerClient:
         return r.status, r.getheaders(), data
 
     def post(self, path, body, extra=None, auth=True):
-        headers = {"Origin": self.origin, "Content-Type": "application/json"}
+        origin = self.review_origin if path in REVIEW else self.origin
+        headers = {"Origin": origin, "Content-Type": "application/json"}
         if auth:
             headers["Cookie"] = "openproof_owner=" + self.token
             headers["X-OpenProof-CSRF"] = self.csrf
         headers.update(extra or {})
         status, _, data = self.request(
-            "POST", "/api/" + path, json.dumps(body), headers
+            "POST", "/api/" + path, json.dumps(body), headers, origin
         )
         return status, json.loads(data)
 

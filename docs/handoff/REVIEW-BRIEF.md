@@ -4,9 +4,9 @@ Status: ready for private reviewer selection. No external review has been commis
 
 ## Engagement target
 
-Review the exact source archive and its SHA-256 manifest. Report its digest with every finding. Original Rust execution-assurance prototype, version 0.9.0, with new signed document approvals, transactional receiver receipts and separate witness checkpoints. The proposed independent-operator pilot is described in OPERATORS.md. Experimental mTLS role services are implemented and tested locally; independent deployment has not occurred.
+Review the exact source archive and its SHA-256 manifest. Report its digest with every finding. Original Rust execution-assurance prototype, version 0.9.0, with new signed document approvals, transactional receiver receipts and separate witness checkpoints. The proposed independent-operator pilot is described in OPERATORS.md. Role services run under separate local accounts on Unix sockets; remote role services are not in this version, and independent deployment has not occurred.
 
-Primary scope: `crates/openproof-witness`, its use of `openproof-core`, `crates/openproof-witness/src/{broker,owner_app,mcp,http,serve,transport}.rs`, `app/`, `scripts/local_roles.py`, trust lifecycle, parsing, private key handling, SQLite state, crash behavior and verifier assumptions. Review other workspace crates where they cross these boundaries. Review existing tests skeptically rather than treating passing tests as security proof.
+Primary scope: the trusted code listed in [TCB.md](../TCB.md) and counted by `scripts/tcb_count.py`: `crates/openproof-core`, `crates/openproof-receiver`, `crates/openproof-role`, `scripts/local_roles.py`, the review page (`app/review.*`, `app/approval.js`, `app/common.js`, `app/base.css`) and the Go verifier. Then the owner side that the receiver and the review page are said to check: `crates/openproof-witness/src/{gate,broker,owner_app,mcp,transport}.rs`. Also trust lifecycle, parsing, private key handling, SQLite state, crash behavior and verifier assumptions. Review other workspace crates where they cross these boundaries. Review existing tests skeptically rather than treating passing tests as security proof.
 
 ## Required questions
 
@@ -44,7 +44,7 @@ Include pages.rs, rotation.rs, the Go witness verifier, Docker build/pilot, page
 
 ## v0.9 review additions
 
-Review the local HTTP owner session, exact review tokens, CSP/text rendering, archived evidence exports, paged broker controller, interrupted key publication, Go cross-epoch archive reconstruction, historical versus current checkpoint times, mTLS fingerprint authorization and bounded operations. Review expired partial handover behavior and trusted-local-account assumptions. Test the normal browser flow and boundary failures, not only direct library calls. New local signed build evidence v2 also binds the Go artifact and supports v1 verification. A human review has not been commissioned; reviewer identity, budget, recipient/transfer authorization and independently administered hosts are still external prerequisites.
+Review the local HTTP owner session, exact review tokens, CSP/text rendering, archived evidence exports, paged broker controller, interrupted key publication, Go cross-epoch archive reconstruction, historical versus current checkpoint times, the role service's peer-account check and bounded operations, and the review page's own approval check. Review expired partial handover behavior and trusted-local-account assumptions. Test the normal browser flow and boundary failures, not only direct library calls. New local signed build evidence v2 also binds the Go artifact and supports v1 verification. A human review has not been commissioned; reviewer identity, budget, recipient/transfer authorization and independently administered hosts are still external prerequisites.
 
 ## Private preview review additions
 

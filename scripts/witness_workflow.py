@@ -11,6 +11,33 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "target/debug/openproof-witness"
+# Operator and test commands live in a separate binary that the owner's main
+# path never runs (docs/TCB.md).
+TOOL = ROOT / "target/debug/openproof-tool"
+TOOL_COMMANDS = {
+    "approve",
+    "check-assertion",
+    "verify",
+    "bench",
+    "export-unverified",
+    "key-public",
+    "install",
+    "revoke",
+    "gap",
+    "role-init",
+    "sign-trust-untracked",
+    "trust-floor",
+    "signer-floor",
+    "clock-status",
+    "clock-repair",
+    "verifier-clock-request",
+    "sign-verifier-clock-repair",
+    "apply-verifier-clock-repair",
+    "verifier-clock-repair",
+    "reset-pages",
+    "tlog-vkey",
+    "tlog-verify",
+}
 sys.path.insert(0, str(ROOT / "reference/python"))
 import openproof_ref as ref
 
@@ -29,7 +56,7 @@ def call(args, value=None):
     if raw and len(raw) > ref.MAX:
         raise ValueError("input limit")
     r = subprocess.run(
-        [str(BINARY), *map(str, args)],
+        [str(TOOL if str(args[0]) in TOOL_COMMANDS else BINARY), *map(str, args)],
         input=raw,
         # Never pass a terminal through: a command without input reads nothing.
         stdin=None if raw is not None else subprocess.DEVNULL,

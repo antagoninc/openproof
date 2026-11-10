@@ -7,36 +7,39 @@ or sign a false history with the witness key. After `install`:
 
 - the receiver and the witness each run as a separate service account;
 - their keys and state are readable only by that account;
-- the owner app reaches them only through the bounded mTLS role service, so
+- the owner app reaches them only through the role service on a Unix socket
+  that admits the owner's account (and root) by its kernel-checked user ID, so
   every change still passes the receiver's approval checks;
-- the services run one root-owned copy of the Rust binary, which the owner
-  cannot change; no interpreter or downloaded package is involved.
+- the services run one root-owned copy of the role binary (`openproof-role`),
+  which the owner cannot change and which holds only the receiver and witness
+  code; no interpreter or downloaded package is involved.
 
 The owner keeps the approval gate, the authority key and the root key. An
 owner passkey is still needed to make approvals that the owner account alone
 cannot produce. The witness is still on the same computer, so G2 still needs
 an independent witness operator.
 
-Commands:
-  sudo python scripts/local_roles.py install --home HOME
-  python scripts/local_roles.py status --home HOME
-  sudo python scripts/local_roles.py uninstall --home HOME
+Commands (the Python standard library only; use the system Python):
+  sudo /usr/bin/python3 -I scripts/local_roles.py install --home HOME
+  /usr/bin/python3 -I BASE/libexec/local_roles.py status --home HOME
+  sudo /usr/bin/python3 -I scripts/local_roles.py uninstall --home HOME
 
 Run `install` only from a checkout you have just pulled and checked: it copies
-the role code from this checkout into a root-owned location.
+the role code and this script from the checkout into a root-owned location.
+Run `status` from that copy: the owner account cannot change it.
 """
 
-import argparse, datetime, hashlib, ipaddress, json, os, platform, plistlib
+import argparse, contextlib, errno, fcntl, json, os, platform, plistlib
 import pwd, shutil, signal, socket, sqlite3, stat, subprocess, sys, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
 ROLES = ("receiver", "witness")
-VERSION = "openproof-local-roles/1"
-# Files the role service needs, relative to the repository root.
+VERSION = "openproof-local-roles/2"
+# Records this script can still uninstall: version 1 used loopback mTLS.
+UNINSTALLABLE = {"openproof-local-roles/1", VERSION}
 # The only code the role services run: one root-owned copy of this binary.
-BINARY = "target/debug/openproof-witness"
+BINARY = "target/debug/openproof-role"
 MAC = platform.system() == "Darwin"
 
 
@@ -184,134 +187,88 @@ def refuse_writable(paths, uid, why):
                     )
 
 
-# ---------------------------------------------------------------- TLS
-
-
-def make_tls(roles_dir, owner_dir, days=825):
-    from cryptography import x509
-    from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import ec
-
-    now = datetime.datetime.now(datetime.timezone.utc)
-    ca_key = ec.generate_private_key(ec.SECP256R1())
-    ca_name = x509.Name(
-        [x509.NameAttribute(NameOID.COMMON_NAME, "OpenProof local roles CA")]
-    )
-    usage = dict(
-        content_commitment=False,
-        key_encipherment=False,
-        data_encipherment=False,
-        key_agreement=False,
-        encipher_only=False,
-        decipher_only=False,
-    )
-
-    def builder(public, subject):
-        return (
-            x509.CertificateBuilder()
-            .subject_name(subject)
-            .issuer_name(ca_name)
-            .public_key(public)
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(now - datetime.timedelta(minutes=5))
-            .not_valid_after(now + datetime.timedelta(days=days))
-        )
-
-    ca = (
-        builder(ca_key.public_key(), ca_name)
-        .add_extension(x509.BasicConstraints(ca=True, path_length=0), True)
-        .add_extension(
-            x509.KeyUsage(
-                digital_signature=False, key_cert_sign=True, crl_sign=True, **usage
-            ),
-            True,
-        )
-        .add_extension(
-            x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), False
-        )
-        .sign(ca_key, hashes.SHA256())
-    )
-    pem = lambda c: c.public_bytes(serialization.Encoding.PEM)
-    secret = lambda k: k.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    )
-
-    def leaf(name, server):
-        key = ec.generate_private_key(ec.SECP256R1())
-        b = (
-            builder(
-                key.public_key(),
-                x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)]),
-            )
-            .add_extension(x509.BasicConstraints(ca=False, path_length=None), True)
-            .add_extension(
-                x509.KeyUsage(
-                    digital_signature=True, key_cert_sign=False, crl_sign=False, **usage
-                ),
-                True,
-            )
-            .add_extension(
-                x509.ExtendedKeyUsage(
-                    [
-                        (
-                            ExtendedKeyUsageOID.SERVER_AUTH
-                            if server
-                            else ExtendedKeyUsageOID.CLIENT_AUTH
-                        )
-                    ]
-                ),
-                False,
-            )
-            .add_extension(
-                x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
-                False,
-            )
-            .add_extension(
-                x509.SubjectKeyIdentifier.from_public_key(key.public_key()), False
-            )
-        )
-        if server:
-            b = b.add_extension(
-                x509.SubjectAlternativeName(
-                    [
-                        x509.DNSName("localhost"),
-                        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
-                    ]
-                ),
-                False,
-            )
-        return b.sign(ca_key, hashes.SHA256()), key
-
-    files = {}
-    client, client_key = leaf("OpenProof owner app", False)
-    files[owner_dir / "ca.pem"] = pem(ca)
-    files[owner_dir / "client.pem"] = pem(client)
-    files[owner_dir / "client.key"] = secret(client_key)
-    for role in ROLES:
-        cert, key = leaf("OpenProof " + role, True)
-        files[roles_dir[role] / "tls/ca.pem"] = pem(ca)
-        files[roles_dir[role] / "tls/server.pem"] = pem(cert)
-        files[roles_dir[role] / "tls/server.key"] = secret(key)
-    fingerprint = hashlib.sha256(
-        client.public_bytes(serialization.Encoding.DER)
-    ).hexdigest()
-    return files, fingerprint, (now + datetime.timedelta(days=days)).isoformat()
-
-
 # ---------------------------------------------------------------- files
 
 
-def write_private(path, data, uid, gid, mode=0o600):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+# Root never follows a link in the owner's home: every file there is opened
+# relative to a directory opened with O_NOFOLLOW, and must be a regular file.
+DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def no_link(open_call, name):
+    try:
+        return open_call()
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise RuntimeError(
+                f"{name} in the owner home is a link, not a regular file or folder"
+            ) from None
+        raise
+
+
+def open_dir(name, dir_fd=None):
+    return no_link(lambda: os.open(name, DIRECTORY, dir_fd=dir_fd), name)
+
+
+def read_regular(name, dir_fd):
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    fd = no_link(lambda: os.open(name, flags, dir_fd=dir_fd), name)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError(f"{name} in the owner home is not a regular file")
+        chunks = []
+        while chunk := os.read(fd, 1 << 20):
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def write_private(name, data, uid, gid, dir_fd, mode=0o600):
+    """Create a new file relative to `dir_fd`; never through a link."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    fd = os.open(name, flags, mode, dir_fd=dir_fd)
     with os.fdopen(fd, "wb") as f:
         f.write(data if isinstance(data, bytes) else data.encode())
         f.flush()
         os.fsync(f.fileno())
-    os.chown(path, uid, gid)
+        os.fchown(f.fileno(), uid, gid)
+
+
+def snapshot_home(home, dest):
+    """Copy the owner's role folders and trust files into `dest`, a new
+    root-only folder. Only regular files are read, and no link is followed."""
+    dest.mkdir(mode=0o700)
+    home_fd = open_dir(home)
+    try:
+        for name in ["trust.json", "trust-signed.json"]:
+            (dest / name).write_bytes(read_regular(name, home_fd))
+        for role in ROLES:
+            role_fd = open_dir(role, home_fd)
+            state_fd = None
+            try:
+                state_fd = open_dir("state", role_fd)
+                (dest / role / "state").mkdir(parents=True, mode=0o700)
+                for name in sorted(os.listdir(state_fd)):
+                    if not name.endswith("-shm"):
+                        data = read_regular(name, state_fd)
+                        (dest / role / "state" / name).write_bytes(data)
+                (dest / role / "key.secret").write_bytes(
+                    read_regular("key.secret", role_fd)
+                )
+            finally:
+                if state_fd is not None:
+                    os.close(state_fd)
+                os.close(role_fd)
+    finally:
+        os.close(home_fd)
+    # Fold any write-ahead log into the copied databases.
+    for db in dest.glob("*/state/*.db"):
+        c = sqlite3.connect(db)
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        c.close()
+    for p in dest.rglob("*"):
+        os.chmod(p, 0o700 if p.is_dir() else 0o600)
 
 
 def copy_state(source, target):
@@ -340,16 +297,6 @@ def chown_tree(path, uid, gid):
             os.chmod(p, 0o700 if p.is_dir() else 0o600)
 
 
-def port_free(port):
-    """No process accepts connections on the port. Connections in TIME_WAIT
-    do not count: the services bind with SO_REUSEADDR."""
-    try:
-        socket.create_connection(("127.0.0.1", port), timeout=1).close()
-        return False
-    except OSError:
-        return True
-
-
 def install_code(base):
     code = base / "libexec"
     if code.exists():
@@ -360,10 +307,17 @@ def install_code(base):
             "Missing " + BINARY + ". Build first with: cargo build --workspace --locked"
         )
     code.mkdir(mode=0o755)
-    shutil.copy2(src, code / "openproof-witness")
-    for p in [code, code / "openproof-witness"]:
+    shutil.copy2(src, code / "openproof-role")
+    # A root-owned copy of this script, so `status` can run from code the
+    # owner account cannot change (docs/LOCAL-ROLES.md).
+    shutil.copy2(Path(__file__).resolve(), code / "local_roles.py")
+    for p, mode in [
+        (code, 0o755),
+        (code / "openproof-role", 0o755),
+        (code / "local_roles.py", 0o644),
+    ]:
         os.chown(p, 0, 0)
-        os.chmod(p, 0o755)
+        os.chmod(p, mode)
     return code
 
 
@@ -374,10 +328,15 @@ def label(role):
     return "com.antagon.openproof." + role
 
 
-def service_command(code, role_dir, role, port, fingerprint):
+def socket_path(base, role):
+    """Each role's socket is in a folder that only its account can change."""
+    return base / "sockets" / role / "service.sock"
+
+
+def service_command(code, role_dir, role, socket_file, owner):
     return [
-        str(code / "openproof-witness"),
-        "serve-role",
+        str(code / "openproof-role"),
+        "serve",
         "--role",
         role,
         "--state",
@@ -388,18 +347,13 @@ def service_command(code, role_dir, role, port, fingerprint):
         str(role_dir / "trust.json"),
         "--signed-trust",
         str(role_dir / "trust-signed.json"),
-        "--cert",
-        str(role_dir / "tls/server.pem"),
-        "--tls-key",
-        str(role_dir / "tls/server.key"),
-        "--ca",
-        str(role_dir / "tls/ca.pem"),
-        "--client-fingerprint",
-        fingerprint,
-        "--bind",
-        "127.0.0.1",
-        "--port",
-        str(port),
+        "--socket",
+        str(socket_file),
+        # The owner's account, and root for install, status checks and recovery.
+        "--client-uid",
+        str(owner),
+        "--client-uid",
+        "0",
         "--accept-trust-updates",
     ]
 
@@ -476,17 +430,17 @@ def stop_service(manager, base, role):
     time.sleep(0.5)
 
 
-def wait_for_port(port, seconds=20):
+def wait_for_socket(path, seconds=20):
     end = time.time() + seconds
     while time.time() < end:
         try:
-            socket.create_connection(("127.0.0.1", port), timeout=1).close()
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                s.connect(str(path))
             return
         except OSError:
             time.sleep(0.3)
-    raise RuntimeError(
-        f"Role service on port {port} did not start. Read its service.log."
-    )
+    raise RuntimeError(f"Role service at {path} did not start. Read its service.log.")
 
 
 # ---------------------------------------------------------------- commands
@@ -496,13 +450,76 @@ def record_path(base):
     return base / "install.json"
 
 
-def heads(home):
-    from witness_workflow import call
+# This script uses the Python standard library only, and never runs code
+# from the checkout or the owner home: it runs as root, and `status` is the
+# check that G1's condition holds (docs/TCB.md).
 
+
+@contextlib.contextmanager
+def home_lock(home, owner):
+    """The owner home's broker lock, as the owner app and broker take it. A
+    lock file this creates belongs to the owner, whatever happens next."""
+    fd = os.open(
+        Path(home) / ".broker.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
+    )
+    try:
+        if os.fstat(fd).st_uid == 0:
+            os.fchown(fd, owner.pw_uid, owner.pw_gid)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def state_head(state):
+    """History length and pinned root of a role state, read directly."""
+    db = sqlite3.connect(f"file:{Path(state) / 'state.db'}?mode=ro", uri=True)
+    try:
+        count = db.execute("SELECT COALESCE(MAX(seq),0) FROM events").fetchone()[0]
+        anchored = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='role_anchor'"
+        ).fetchone()
+        row = (
+            db.execute("SELECT root FROM role_anchor WHERE id=1").fetchone()
+            if anchored
+            else None
+        )
+    finally:
+        db.close()
+    return dict(count=count, root=row[0] if row else None)
+
+
+def ask(sock, op):
+    """One request to a role service on its Unix socket."""
+    raw = b"{}"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(20)
+        s.connect(str(sock))
+        s.sendall(
+            b"POST /v1/%s HTTP/1.1\r\nContent-Type: application/json\r\n"
+            b"Content-Length: %d\r\nConnection: close\r\n\r\n" % (op.encode(), len(raw))
+            + raw
+        )
+        response = b""
+        while chunk := s.recv(65536):
+            response += chunk
+            if len(response) > 1_200_000:
+                raise RuntimeError("role service answer too large")
+    head, _, body = response.partition(b"\r\n\r\n")
+    if not head.startswith(b"HTTP/1.1 200 "):
+        raise RuntimeError(f"role service {sock}: {head[:40]!r} {body[:200]!r}")
+    return json.loads(body)
+
+
+def heads(states):
+    return {role: state_head(states / role / "state") for role in ROLES}
+
+
+def service_heads(sockets):
     return {
         role: dict(
-            count=call(["head", home / role / "state"])["count"],
-            root=call(["role-status", home / role / "state"])["root"],
+            count=ask(sockets[role], "head")["count"],
+            root=ask(sockets[role], "status")["root"],
         )
         for role in ROLES
     }
@@ -514,12 +531,11 @@ def _move_roles(
     code,
     users,
     manager,
-    ports,
     owner,
     owner_entry,
     accounts,
     roles_dir,
-    tls_owner,
+    staging,
     before,
     backup,
 ):
@@ -530,65 +546,94 @@ def _move_roles(
     for role in ROLES:
         d = roles_dir[role]
         d.mkdir(mode=0o700)
-        copy_state(home / role / "state", d / "state")
-        shutil.copy2(home / role / "key.secret", d / "key.secret")
-        shutil.copy2(home / "trust.json", d / "trust.json")
-        shutil.copy2(home / "trust-signed.json", d / "trust-signed.json")
-    files, fingerprint, expires = make_tls(roles_dir, tls_owner)
-    for path, data in files.items():
-        role = next((r for r in ROLES if roles_dir[r] in path.parents), None)
-        uid, gid = (
-            (owner, owner_entry.pw_gid)
-            if role is None
-            else (accounts[role].pw_uid, accounts[role].pw_gid)
-        )
-        write_private(path, data, uid, gid)
-    os.chown(tls_owner, owner, owner_entry.pw_gid)
-    os.chmod(tls_owner, 0o700)
+        copy_state(staging / role / "state", d / "state")
+        shutil.copy2(staging / role / "key.secret", d / "key.secret")
+        shutil.copy2(staging / "trust.json", d / "trust.json")
+        shutil.copy2(staging / "trust-signed.json", d / "trust-signed.json")
     for role in ROLES:
         chown_tree(roles_dir[role], accounts[role].pw_uid, accounts[role].pw_gid)
+    sockets = base / "sockets"
+    sockets.mkdir(mode=0o755)
+    os.chown(sockets, 0, 0)
+    for role in ROLES:
+        folder = socket_path(base, role).parent
+        folder.mkdir(mode=0o755)
+        os.chown(folder, accounts[role].pw_uid, accounts[role].pw_gid)
+        os.chmod(folder, 0o755)
     say("5/7 Start the role services")
     for role in ROLES:
-        command = service_command(code, roles_dir[role], role, ports[role], fingerprint)
+        command = service_command(
+            code, roles_dir[role], role, socket_path(base, role), owner
+        )
         start_service(manager, base, role, accounts[role], command, roles_dir[role])
     for role in ROLES:
-        wait_for_port(ports[role])
+        wait_for_socket(socket_path(base, role))
     say("6/7 Connect the owner home and compare the history")
     config = dict(
-        version="openproof-service-client/1",
-        **{
-            role: dict(
-                url=f"https://127.0.0.1:{ports[role]}",
-                ca=str(tls_owner / "ca.pem"),
-                cert=str(tls_owner / "client.pem"),
-                key=str(tls_owner / "client.key"),
-            )
-            for role in ROLES
-        },
+        version="openproof-service-client/2",
+        **{role: dict(socket=str(socket_path(base, role))) for role in ROLES},
     )
-    write_private(
-        home / "service-client.json",
-        json.dumps(config, indent=2),
-        owner,
-        owner_entry.pw_gid,
-    )
-    after = heads(home)
+    home_fd = open_dir(home)
+    try:
+        write_private(
+            "service-client.json",
+            json.dumps(config, indent=2),
+            owner,
+            owner_entry.pw_gid,
+            home_fd,
+        )
+    finally:
+        os.close(home_fd)
+    after = service_heads({role: socket_path(base, role) for role in ROLES})
     if after != before:
         raise RuntimeError(f"History differs after the move: {before} vs {after}")
     say("7/7 Move the owner's copies of the role keys out of the owner's reach")
     backup.mkdir(mode=0o700)
-    for role in ROLES:
-        shutil.move(str(home / role), str(backup / role))
-        (home / role).mkdir(mode=0o700)
-        os.chown(home / role, owner, owner_entry.pw_gid)
+    home_fd = open_dir(home)
+    try:
+        for role in ROLES:
+            # A rename moves the entry itself, never through a link.
+            os.rename(role, backup / role, src_dir_fd=home_fd)
+            os.mkdir(role, 0o700, dir_fd=home_fd)
+            os.chown(
+                role, owner, owner_entry.pw_gid, dir_fd=home_fd, follow_symlinks=False
+            )
+    finally:
+        os.close(home_fd)
     for p in backup.rglob("*"):
         os.lchown(p, 0, 0)
-    return after, expires
+    return after
 
 
-def install(home, base, users, manager, base_port):
-    from witness_workflow import home_lock
+def return_roles(source, home, owner):
+    """Put the role folders prepared in `source` (root-only) into the owner
+    home, in place of its empty role folders. Nothing in the owner home is
+    followed or written through."""
+    roles = [role for role in ROLES if (source / role).exists()]
+    for role in roles:
+        chown_tree(source / role, owner.pw_uid, owner.pw_gid)
+    home_fd = open_dir(home)
+    try:
+        for role in roles:
+            try:
+                fd = open_dir(role, home_fd)
+            except FileNotFoundError:
+                fd = None
+            if fd is not None:
+                try:
+                    if os.listdir(fd):
+                        raise RuntimeError(
+                            f"{home / role} is not empty. Move its contents aside first."
+                        )
+                finally:
+                    os.close(fd)
+                os.rmdir(role, dir_fd=home_fd)
+            os.rename(source / role, role, dst_dir_fd=home_fd)
+    finally:
+        os.close(home_fd)
 
+
+def install(home, base, users, manager):
     if os.geteuid() != 0:
         raise RuntimeError("Run install with sudo.")
     home = home.resolve()
@@ -608,18 +653,11 @@ def install(home, base, users, manager, base_port):
             if not (home / role / need).exists():
                 raise RuntimeError(f"{home / role / need} is missing.")
     owner_entry = pwd.getpwuid(owner)
-    ports = {"receiver": base_port, "witness": base_port + 1}
-    with home_lock(home):
-        before = heads(home)
-        if before["receiver"]["count"] != before["witness"]["count"]:
-            raise RuntimeError(
-                "Some receipts are not witnessed yet. Execute or recover the pending "
-                "actions in the owner app first."
-            )
-        for role in ROLES:
-            if not port_free(ports[role]):
+    with home_lock(home, owner_entry):
+        for left in ["sockets", "staging", *ROLES]:
+            if (base / left).exists():
                 raise RuntimeError(
-                    f"Port {ports[role]} is in use. Choose another with --port."
+                    f"{base / left} already exists. Run uninstall first or move it aside."
                 )
         base.mkdir(mode=0o755, parents=True, exist_ok=True)
         os.chown(base, 0, 0)
@@ -627,6 +665,20 @@ def install(home, base, users, manager, base_port):
         refuse_writable(
             [base], owner, "Role keys and code would be in the owner's reach."
         )
+        # Root works only on a copy of the owner's files made without links.
+        staging = base / "staging"
+        try:
+            snapshot_home(home, staging)
+            before = heads(staging)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        if before["receiver"]["count"] != before["witness"]["count"]:
+            shutil.rmtree(staging)
+            raise RuntimeError(
+                "Some receipts are not witnessed yet. Execute or recover the pending "
+                "actions in the owner app first."
+            )
         say("1/7 Check that the owner cannot change the role location")
         say("2/7 Install a root-owned copy of the openproof-witness binary")
         code = install_code(base)
@@ -635,23 +687,19 @@ def install(home, base, users, manager, base_port):
         )
         accounts = {}
         roles_dir = {role: base / role for role in ROLES}
-        tls_owner = home / "service-tls"
-        if tls_owner.exists():
-            raise RuntimeError(f"{tls_owner} already exists. Move it aside first.")
         backup = base / ("owner-backup-" + time.strftime("%Y%m%dT%H%M%S"))
         try:
-            after, expires = _move_roles(
+            after = _move_roles(
                 home,
                 base,
                 code,
                 users,
                 manager,
-                ports,
                 owner,
                 owner_entry,
                 accounts,
                 roles_dir,
-                tls_owner,
+                staging,
                 before,
                 backup,
             )
@@ -662,21 +710,24 @@ def install(home, base, users, manager, base_port):
                 if log.exists():
                     tail = log.read_text(errors="replace").splitlines()[-5:]
                     say(f"{role} service log: " + " | ".join(tail))
-            for role in ROLES:
-                if (backup / role).exists():
-                    if (home / role).exists():
-                        (home / role).rmdir()
-                    shutil.move(str(backup / role), str(home / role))
-                    chown_tree(home / role, owner, owner_entry.pw_gid)
+            return_roles(backup, home, owner_entry)
             for role in ROLES:
                 stop_service(manager, base, role)
                 if role in accounts:  # Only accounts this install created.
                     delete_account(users[role])
                 shutil.rmtree(roles_dir[role], ignore_errors=True)
-            (home / "service-client.json").unlink(missing_ok=True)
-            shutil.rmtree(tls_owner, ignore_errors=True)
+            home_fd = open_dir(home)
+            try:
+                os.unlink("service-client.json", dir_fd=home_fd)
+            except FileNotFoundError:
+                pass
+            finally:
+                os.close(home_fd)
+            shutil.rmtree(base / "sockets", ignore_errors=True)
             shutil.rmtree(code, ignore_errors=True)
+            shutil.rmtree(staging, ignore_errors=True)
             raise
+        shutil.rmtree(staging)
         record = dict(
             version=VERSION,
             home=str(home),
@@ -684,30 +735,30 @@ def install(home, base, users, manager, base_port):
             platform="macos" if MAC else "linux",
             manager=manager,
             users=users,
-            ports=ports,
+            sockets={role: str(socket_path(base, role)) for role in ROLES},
             base=str(base),
             backup=str(backup),
-            tls_expires=expires,
             installed_at=int(time.time()),
             history=after,
         )
         path = record_path(base)
         path.write_text(json.dumps(record, indent=2))
         os.chmod(path, 0o644)
-    lock = home / ".broker.lock"
-    if lock.exists() and lock.stat().st_uid == 0:
-        os.chown(lock, owner, owner_entry.pw_gid)
     say("Done. The receiver and the witness now run under their own accounts.")
     say(f"Backup of the owner's old role folders (root only): {backup}")
     return record
 
 
-def load_record(base, home):
+def load_record(base, home, versions=(VERSION,)):
     path = record_path(base)
     if not path.exists():
         raise RuntimeError("Local roles are not installed.")
     record = json.loads(path.read_text())
-    if record.get("version") != VERSION or Path(record["home"]) != home.resolve():
+    if record.get("version") not in versions:
+        raise RuntimeError(
+            "Local roles were installed by an earlier version. Run uninstall, then install."
+        )
+    if Path(record["home"]) != home.resolve():
         raise RuntimeError(
             f"Local roles are installed for another home: {record.get('home')}"
         )
@@ -715,48 +766,55 @@ def load_record(base, home):
 
 
 def status(home, base):
+    """Whether the roles are separated and the receiver requires the passkey.
+    Run it as the owner or as the administrator; it reads only the install
+    record, the role folders' metadata and the services' own answers."""
     record = load_record(base, home)
-    report = dict(
-        installed_for=record["home"], tls_expires=record["tls_expires"], roles={}
-    )
-    from witness_workflow import call
-
+    owner = pwd.getpwnam(record["owner"])
+    report = dict(installed_for=record["home"], roles={})
     for role in ROLES:
         d = Path(record["base"]) / role
-        entry = dict(account=record["users"][role], port=record["ports"][role])
+        entry = dict(account=record["users"][role], socket=record["sockets"][role])
         try:
-            entry["history_count"] = call(["head", home / role / "state"])["count"]
+            entry["history_count"] = ask(record["sockets"][role], "head")["count"]
             entry["service"] = "running"
         except Exception as e:
             entry["service"] = "not reachable: " + str(e)[:200]
         try:
-            open(d / "key.secret", "rb").close()
-            entry["key_readable_by_this_account"] = True
-        except PermissionError:
-            entry["key_readable_by_this_account"] = False
-        try:
-            entry["folder_owner"] = pwd.getpwuid(d.stat().st_uid).pw_name
-        except (KeyError, PermissionError):
-            entry["folder_owner"] = "unknown"
+            s = os.lstat(d)
+            entry["folder_owner"] = pwd.getpwuid(s.st_uid).pw_name
+            # A folder only its account can enter keeps the key from the owner.
+            entry["folder_private"] = stat.S_ISDIR(s.st_mode) and not (
+                s.st_mode & 0o077
+            )
+        except (KeyError, OSError):
+            entry["folder_owner"], entry["folder_private"] = "unknown", False
         report["roles"][role] = entry
-    report["separated"] = os.geteuid() != 0 and all(
+    report["separated"] = owner.pw_uid != 0 and all(
         r["service"] == "running"
-        and not r["key_readable_by_this_account"]
-        and r["folder_owner"] == r["account"]
+        and r["folder_private"]
+        and r["folder_owner"] == r["account"] != owner.pw_name
         for r in report["roles"].values()
     )
+    # The receiver service reports the trust it admits under. With an owner
+    # passkey in it, every new change needs an assertion from that passkey.
+    try:
+        passkey = ask(record["sockets"]["receiver"], "status").get("owner_passkey")
+    except Exception:
+        passkey = None
+    report["passkey_required_by_receiver"] = passkey is not None
+    if passkey is not None:
+        report["receiver_passkey_origin"] = passkey["origin"]
     return report
 
 
 def uninstall(home, base):
-    from witness_workflow import home_lock
-
     if os.geteuid() != 0:
         raise RuntimeError("Run uninstall with sudo.")
     home = home.resolve()
-    record = load_record(base, home)
+    record = load_record(base, home, UNINSTALLABLE)
     owner = pwd.getpwnam(record["owner"])
-    with home_lock(home):
+    with home_lock(home, owner):
         # Read the role states directly, not through the services: uninstall
         # must work even when a service does not answer.
         say("1/4 Stop the role services")
@@ -764,21 +822,26 @@ def uninstall(home, base):
             stop_service(record["manager"], base, role)
         before = heads(base)
         say("2/4 Return the role keys and state to the owner home")
+        # Prepare the returned folders where the owner cannot reach, check
+        # them, then move them into place.
+        restore = base / ("restore-" + time.strftime("%Y%m%dT%H%M%S"))
+        restore.mkdir(mode=0o700)
         for role in ROLES:
-            d = base / role
-            target = home / role
-            if any(target.iterdir()):
-                raise RuntimeError(
-                    f"{target} is not empty. Move its contents aside first."
-                )
-            copy_state(d / "state", target / "state")
-            shutil.copy2(d / "key.secret", target / "key.secret")
-            chown_tree(target, owner.pw_uid, owner.pw_gid)
-        (home / "service-client.json").unlink()
-        shutil.rmtree(home / "service-tls")
-        after = heads(home)
+            (restore / role).mkdir(mode=0o700)
+            copy_state(base / role / "state", restore / role / "state")
+            shutil.copy2(base / role / "key.secret", restore / role / "key.secret")
+        after = heads(restore)
         if after != before:
             raise RuntimeError(f"History differs after the return: {before} vs {after}")
+        return_roles(restore, home, owner)
+        restore.rmdir()
+        home_fd = open_dir(home)
+        try:
+            os.unlink("service-client.json", dir_fd=home_fd)
+        finally:
+            os.close(home_fd)
+        # Version 1 installs kept TLS client credentials here.
+        shutil.rmtree(home / "service-tls", ignore_errors=True)
         say("3/4 Keep the role folders in a root-only backup")
         backup = base / ("roles-backup-" + time.strftime("%Y%m%dT%H%M%S"))
         backup.mkdir(mode=0o700)
@@ -791,6 +854,7 @@ def uninstall(home, base):
             delete_account(record["users"][role])
         shutil.rmtree(base / "libexec", ignore_errors=True)
         shutil.rmtree(base / "runtime", ignore_errors=True)
+        shutil.rmtree(base / "sockets", ignore_errors=True)
         record_path(base).unlink()
     say("Done. The owner home runs the receiver and the witness locally again.")
     return dict(history=after, backup=str(backup))
@@ -814,17 +878,11 @@ def main():
     )
     p.add_argument("--receiver-account", default=d["users"]["receiver"])
     p.add_argument("--witness-account", default=d["users"]["witness"])
-    p.add_argument(
-        "--port",
-        type=int,
-        default=47101,
-        help="Receiver port; the witness uses the next port",
-    )
     a = p.parse_args()
     users = {"receiver": a.receiver_account, "witness": a.witness_account}
     try:
         if a.command == "install":
-            result = install(a.home, a.base, users, a.manager, a.port)
+            result = install(a.home, a.base, users, a.manager)
         elif a.command == "status":
             result = status(a.home, a.base)
         else:

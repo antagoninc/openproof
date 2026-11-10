@@ -63,6 +63,8 @@ run(
         "integrations",
     ],
 )
+# The trusted code count, its budget and the trusted crates' boundaries (docs/TCB.md).
+run("tcb", [sys.executable, "scripts/tcb_count.py", "--check"])
 run(
     "clippy",
     [
@@ -88,21 +90,30 @@ run("tests-experimental", ["cargo", "test", "--workspace", "--locked", *EXPERIME
 run("debug-build", ["cargo", "build", "--workspace", "--locked"])
 
 
-def check_default_build(name, binary):
-    """The default witness binary must not contain the experimental commands."""
+def check_default_build(name, target):
+    """The default binaries keep to their own commands: no experimental command
+    anywhere, no operator command in the owner's binary, and nothing but
+    `serve` in the role service."""
     code = (
         "import subprocess, sys\n"
-        "for c in ['sign-rotation', 'rotate-state', 'storage-authorize']:\n"
-        "    r = subprocess.run([sys.argv[1], c, 'x', 'y'], capture_output=True, text=True)\n"
-        "    assert r.returncode and 'usage:' in r.stderr and c not in r.stderr, c\n"
-        "print('PASS: no experimental commands in', sys.argv[1])\n"
+        "d = sys.argv[1]\n"
+        "absent = {\n"
+        "  'openproof-witness': ['sign-rotation', 'rotate-state', 'storage-authorize',\n"
+        "                        'approve', 'verify', 'gap', 'revoke', 'serve-role'],\n"
+        "  'openproof-tool': ['sign-rotation', 'rotate-state', 'storage-authorize'],\n"
+        "  'openproof-role': ['receive', 'approve', 'owner-app', 'serve-role'],\n"
+        "}\n"
+        "for binary, commands in absent.items():\n"
+        "    for c in commands:\n"
+        "        r = subprocess.run([d + '/' + binary, c, 'x', 'y'], capture_output=True, text=True)\n"
+        "        listed = '  ' + c + ' ' in r.stderr or '  ' + c + '\\n' in r.stderr\n"
+        "        assert r.returncode and 'usage' in r.stderr and not listed, (binary, c)\n"
+        "print('PASS: default binaries keep to their own commands in', d)\n"
     )
-    run(name, [sys.executable, "-c", code, binary])
+    run(name, [sys.executable, "-c", code, target])
 
 
-check_default_build(
-    "default-excludes-experimental", ROOT / "target/debug/openproof-witness"
-)
+check_default_build("default-binaries", ROOT / "target/debug")
 run(
     "fuzz-check",
     ["cargo", "check", "--manifest-path", "fuzz/Cargo.toml", "--locked", "--bins"],
@@ -191,11 +202,10 @@ if not args.skip_audit:
     assert not report["vulnerabilities"]["found"]
     (out / "rustsec.json").write_text(json.dumps(report, indent=2) + "\n")
 run("release", ["cargo", "build", "--workspace", "--release", "--locked"])
-check_default_build(
-    "release-excludes-experimental", ROOT / "target/release/openproof-witness"
-)
-shutil.copyfile(ROOT / "target/release/openproof-witness", out / "openproof-witness")
-(out / "openproof-witness").chmod(0o755)
+check_default_build("release-binaries", ROOT / "target/release")
+for binary in ["openproof-witness", "openproof-role"]:
+    shutil.copyfile(ROOT / "target/release" / binary, out / binary)
+    (out / binary).chmod(0o755)
 assert source == snapshot(), "Source changed during validation; provenance not emitted"
 manifest = json.dumps(source, sort_keys=True, indent=2).encode()
 (out / "source-manifest.json").write_bytes(manifest)
@@ -212,6 +222,10 @@ provenance = {
         {
             "name": "openproof-witness",
             "digest": {"sha256": sha((out / "openproof-witness").read_bytes())},
+        },
+        {
+            "name": "openproof-role",
+            "digest": {"sha256": sha((out / "openproof-role").read_bytes())},
         },
     ],
     "predicateType": "https://slsa.dev/provenance/v1",
@@ -267,13 +281,14 @@ count = sum(
 differential = re.search(
     r"PASS (\d+) Go/Rust", (out / "witness-conformance.log").read_text()
 ).group(1)
+tcb = json.loads(run("tcb-report", [sys.executable, "scripts/tcb_count.py", "--json"]))
 (out / "SUMMARY.md").write_text(f"""# Validation results
 
 {count} Rust tests passed. Formatting, Clippy, schema checks, 224 evidence, 94 trust and {differential} Go/Rust witness differential cases (including owner passkey assertions), the separate-process agent pilot, declared-license policy, and release build passed.
 
 RustSec audit: {'SKIPPED explicitly' if args.skip_audit else 'passed; database revision recorded in rustsec.json'}.
 Platform: {platform.platform()}.
-Python tests of the Rust owner app, MCP server, broker and role service: passed. External model calls: never made by this validation script.
+Python tests of the Rust owner app, MCP server, broker, role service and review page: passed. Trusted code: {tcb["total"]} lines (docs/TCB.md). External model calls: never made by this validation script.
 
 provenance.json links the executable SHA-256 to source-manifest.json, Cargo.lock, toolchain and build command. It is an unsigned local claim, not an independently verified attestation or SLSA level. The build is not hermetic; cross-host reproducibility is not established. No external security audit is claimed.
 """)

@@ -18,11 +18,22 @@ ENABLED = (
 )
 OWNER = "optest-owner"
 BASE = Path("/var/lib/openproof-roletest")
-PORT = 47201
+SOCKET = BASE / "sockets/receiver/service.sock"
 # Run as the owner account: attempts that separate accounts must refuse.
 PROBE = r"""
-import json, socket, sqlite3, ssl, sys, http.client
-base, home = sys.argv[1], sys.argv[2]
+import json, socket, sqlite3, sys
+base, home, path = sys.argv[1], sys.argv[2], sys.argv[3]
+def post(value):
+    raw = json.dumps(value).encode()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(5)
+        s.connect(path)
+        s.sendall(b"POST /v1/receive HTTP/1.1\r\nContent-Type: application/json\r\n"
+                  + b"Content-Length: %d\r\n\r\n" % len(raw) + raw)
+        response = b""
+        while chunk := s.recv(65536):
+            response += chunk
+    return int(response.split(b" ")[1]) if response else None
 out = {}
 for role in ["receiver", "witness"]:
     try:
@@ -38,12 +49,11 @@ for role in ["receiver", "witness"]:
     except Exception:
         out[role + "_state"] = "denied"
 # The owner may call the receiver service, but an unapproved request is refused.
-c = ssl.create_default_context(cafile=f"{home}/service-tls/ca.pem")
-c.load_cert_chain(f"{home}/service-tls/client.pem", f"{home}/service-tls/client.key")
-conn = http.client.HTTPSConnection("127.0.0.1", int(sys.argv[3]), context=c, timeout=5)
-conn.request("POST", "/v1/receive", json.dumps({"request": {"forged": True}}),
-             {"Content-Type": "application/json"})
-out["forged_receive"] = conn.getresponse().status
+# Any other account gets no answer at all.
+try:
+    out["forged_receive"] = post({"request": {"forged": True}})
+except ConnectionError:
+    out["forged_receive"] = "closed"
 print(json.dumps(out))
 """
 
@@ -87,20 +97,48 @@ class LocalRolesTests(unittest.TestCase):
         finally:
             o.close()
 
-    def local_roles(self, command, user=None):
-        python = sys.executable
+    def local_roles(
+        self, command, user=None, script=ROOT / "scripts/local_roles.py", ok=True
+    ):
+        # The system Python, isolated: the script needs only the standard library.
         args = [
-            python,
-            str(ROOT / "scripts/local_roles.py"),
+            "/usr/bin/python3",
+            "-I",
+            str(script),
             command,
             "--home",
             str(self.h),
         ]
-        args += ["--base", str(BASE), "--manager", "manual", "--port", str(PORT)]
+        args += ["--base", str(BASE), "--manager", "manual"]
         args += ["--receiver-account", "optest-rcv", "--witness-account", "optest-wit"]
         r = subprocess.run(args, capture_output=True, text=True, user=user)
+        if not ok:
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            return r.stderr
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return json.loads(r.stdout[r.stdout.index("{") :])
+
+    def test_install_follows_no_link_in_the_owner_home(self):
+        """Root must not read a file that the owner home only links to."""
+        secret = Path(self.temp.name) / "root-only.secret"
+        secret.write_text("not the owner's")
+        secret.chmod(0o600)
+        elsewhere = Path(self.temp.name) / "elsewhere"
+        for planted in ["receiver/key.secret", "trust.json", "witness/state"]:
+            target = self.h / planted
+            # Move the real entry aside and leave a link in its place.
+            target.rename(elsewhere)
+            target.symlink_to(elsewhere if planted.endswith("state") else secret)
+            os.lchown(target, self.owner.pw_uid, self.owner.pw_gid)
+            error = self.local_roles("install", ok=False)
+            self.assertIn("is a link, not a regular file", error)
+            self.assertFalse((BASE / "install.json").exists())
+            self.assertFalse((BASE / "staging").exists())
+            self.assertFalse(_exists("optest-rcv"))
+            target.unlink()
+            elsewhere.rename(target)
+        # The lock file the failed installs created belongs to the owner.
+        self.assertEqual((self.h / ".broker.lock").stat().st_uid, self.owner.pw_uid)
 
     def test_install_separates_roles_and_uninstall_restores(self):
         from witness_workflow import call, renew
@@ -126,14 +164,25 @@ class LocalRolesTests(unittest.TestCase):
         # unapproved request through the service changes nothing.
         probe = Path(self.temp.name) / "probe.py"
         probe.write_text(PROBE)
-        r = subprocess.run(
-            ["/usr/bin/python3", "-I", str(probe), str(BASE), str(self.h), str(PORT)],
-            capture_output=True,
-            text=True,
-            user=OWNER,
-        )
-        self.assertEqual(r.returncode, 0, r.stderr)
-        seen = json.loads(r.stdout)
+
+        def run_probe(user):
+            r = subprocess.run(
+                [
+                    "/usr/bin/python3",
+                    "-I",
+                    str(probe),
+                    str(BASE),
+                    str(self.h),
+                    str(SOCKET),
+                ],
+                capture_output=True,
+                text=True,
+                user=user,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return json.loads(r.stdout)
+
+        seen = run_probe(OWNER)
         self.assertIn(seen.pop("forged_receive"), (400, 409))
         self.assertEqual(
             seen,
@@ -144,7 +193,17 @@ class LocalRolesTests(unittest.TestCase):
                 "witness_state": "denied",
             },
         )
+        self.assertIn(run_probe("nobody")["forged_receive"], (None, "closed"))
         self.assertEqual(call(["head", self.h / "receiver/state"])["count"], 3)
+        # Status runs from the root-owned copy that install made.
+        copy = BASE / "libexec/local_roles.py"
+        self.assertEqual((copy.stat().st_uid, copy.stat().st_mode & 0o777), (0, 0o644))
+        status = self.local_roles("status", user=OWNER, script=copy)
+        self.assertTrue(status["separated"], status)
+        # The administrator gets the same answer.
+        self.assertEqual(self.local_roles("status", script=copy), status)
+        # This home has no owner passkey: the receiver says so itself.
+        self.assertFalse(status["passkey_required_by_receiver"], status)
         # Uninstall returns the keys and the full history to the owner home.
         self.local_roles("uninstall")
         self.assertFalse((self.h / "service-client.json").exists())

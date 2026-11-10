@@ -5,9 +5,10 @@
 
 This program is outside the trusted code. It only carries bytes: the OpenProof
 witness signs the checkpoint and the consistency proof (`tlog-request`), each
-public witness checks them and cosigns (c2sp.org/tlog-witness), and the binary
-checks every cosignature (`tlog-verify`) before anything is saved. A lying
-submitter can withhold cosignatures; it cannot make one up.
+public witness checks them and cosigns (c2sp.org/tlog-witness), and
+`openproof-tool tlog-verify` checks every cosignature before anything is saved.
+A lying submitter can withhold cosignatures; it cannot make one up. The Go
+verifier checks the saved note again (docs/WITNESS-NETWORK.md).
 
 Configuration, HOME/tlog/witnesses.json:
 

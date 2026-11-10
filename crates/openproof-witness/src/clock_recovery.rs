@@ -121,13 +121,6 @@ pub fn repair_clock(
     tx.commit()?;
     Ok(audit)
 }
-pub(super) fn signed_time(tx: &rusqlite::Transaction<'_>, time: u64) -> Result<()> {
-    tx.execute(
-        "UPDATE signing_clock SET floor=MAX(floor,?1) WHERE id=1",
-        [time],
-    )?;
-    Ok(())
-}
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VerifierClockRepair {

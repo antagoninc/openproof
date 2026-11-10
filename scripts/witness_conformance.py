@@ -3,7 +3,7 @@
 
 import argparse, base64, copy, hashlib, json, subprocess, time
 from pathlib import Path
-from witness_workflow import ROOT, BINARY, Broker, initialize, save, ref, enroll_passkey
+from witness_workflow import ROOT, TOOL, Broker, initialize, save, ref, enroll_passkey
 
 ORIGIN = "http://localhost:8765"
 
@@ -12,7 +12,7 @@ def run_both(out, go_binary, now, trust, pin, raw):
     """Run the Rust and Go verifiers on one package; both must agree."""
     (out / "case.json").write_bytes(raw)
     rust = subprocess.run(
-        [str(BINARY), "verify", str(trust), str(pin)],
+        [str(TOOL), "verify", str(trust), str(pin)],
         input=raw,
         capture_output=True,
         timeout=20,

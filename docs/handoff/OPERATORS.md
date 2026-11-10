@@ -1,6 +1,8 @@
 # Independent operator handoff
 
-**Prepared locally. No independent hosts, operators or human reviewer enrolled.** Containers on one host remain controlled by that host administrator. Neither this package nor successful local mTLS tests establish organizational independence.
+**Prepared locally. No independent hosts, operators or human reviewer enrolled.** Containers on one host remain controlled by that host administrator. Neither this package nor successful local tests establish organizational independence.
+
+**Since 10 Nov 2026 the role service runs only on the same computer, on a Unix socket (`openproof-role serve`, [LOCAL-ROLES.md](../LOCAL-ROLES.md)).** The TLS steps below describe the remote role service at commit `51c0978` ([EXPERIMENTS.md](../EXPERIMENTS.md)). A remote deployment needs a reviewed remote transport first.
 
 ## Assign responsibility first
 

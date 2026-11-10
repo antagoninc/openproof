@@ -262,7 +262,7 @@ fn load_proposal(tx: &Transaction<'_>, id: &str) -> Result<(Proposal, Option<Str
 /// The gate keeps its own passkey pin, like the roles do. When the receiver state is
 /// on this host, the trust must also carry the passkey that the receiver pinned.
 fn pin_passkey(tx: &Transaction<'_>, home: &Path, t: &Trust) -> Result<()> {
-    passkey::pin_owner_passkey(tx, t)?;
+    pin_owner_passkey(tx, t)?;
     let receiver = home.join("receiver/state");
     if !receiver.join("state.db").exists() {
         return Ok(());
@@ -418,9 +418,12 @@ pub fn gate_approve(
         ],
     )?;
     tx.commit()?;
+    // The approval itself goes back too: the owner's review page checks it
+    // against what it shows and computes the passkey challenge from it.
     Ok(json!({
         "state": "passkey_required",
         "proposal_id": id,
+        "approval": q.approval.payload,
         "approval_sha256": approval_sha256,
         "challenge": URL_SAFE_NO_PAD.encode(hex::decode(&approval_sha256)?),
         "rp_id": passkey.rp_id,

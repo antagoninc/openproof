@@ -11,7 +11,7 @@ This milestone implements the remaining code-addressable Claude F3/F4/F6/F7 item
 openproof-witness signer-init signer-state ROOT_PUBLIC_KEY
 openproof-witness sign-trust root.secret signer-state < trust.json > trust-signed.json
 # Each role operator independently authenticates ROOT_PUBLIC_KEY.
-openproof-witness role-init role/state ROOT_PUBLIC_KEY
+openproof-tool role-init role/state ROOT_PUBLIC_KEY
 openproof-witness install-signed role/state ROOT_PUBLIC_KEY < trust-signed.json
 # Independent verifier initializes a NEW private state directory once.
 openproof-witness verifier-init verifier-state ROOT_PUBLIC_KEY
@@ -58,19 +58,19 @@ Trust validation rejects duplicate list entries and active-authority overlap wit
 ## Safe clock recovery
 
 ```sh
-openproof-witness clock-status role/state
-openproof-witness clock-repair role/state trust.json authority.secret
+openproof-tool clock-status role/state
+openproof-tool clock-repair role/state trust.json authority.secret
 ```
 
 The state tracks both its admission clock floor and the latest time used for a signed receipt/checkpoint. An owner-authorized repair can lower an installation-only clock jump, but never below the signed-time floor. It requires the exact installed trust epoch/digest and active authority key. A signed `witness-clock-repair/1` record captures the old/new/signed floors and trust digest. Audit history is capped at 64 repairs. Documents, nonces, events, trust floors and revocations are preserved. Verifier clock floors cannot be changed through this role-recovery command. Independent operators use an offline root-signed token so the root secret stays on the administrator's host:
 
 ```sh
 # Verifier host, after correcting its clock:
-openproof-witness verifier-clock-request verifier-state > repair-request.json
+openproof-tool verifier-clock-request verifier-state > repair-request.json
 # Root administrator host, after reviewing the request:
-openproof-witness sign-verifier-clock-repair root.secret < repair-request.json > repair-token.json
+openproof-tool sign-verifier-clock-repair root.secret < repair-request.json > repair-token.json
 # Verifier host; only public signed objects cross the boundary:
-openproof-witness apply-verifier-clock-repair verifier-state trust-signed.json < repair-token.json
+openproof-tool apply-verifier-clock-repair verifier-state trust-signed.json < repair-token.json
 ```
 
 The token binds the exact old floor, new floor, trust epoch/digest and checkpoint count/head/time. It is valid for ten minutes after its proposed new floor, fails after state changes or replay, and cannot rewind below the accepted checkpoint time. Application preserves all trust/checkpoint floors and retains the signed `verifier-clock-repair/1` record. Installed trust may have expired during an outage; signature and exact installed digest still bind repair, and ordinary verification remains blocked until trust is renewed. The older `verifier-clock-repair ... ROOT_KEY` convenience command is only for single-owner local setups; independent operators must use the token path. Neither path resets verifier state.

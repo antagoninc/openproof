@@ -884,3 +884,56 @@ fn refreshed_checkpoint_preserves_count_and_rejects_wrong_key_or_clock() {
     assert!(current_checkpoint(&s.dir.join("witness"), &s.t, &s.r, 111).is_err());
     assert!(current_checkpoint(&s.dir.join("witness"), &s.t, &s.w, 109).is_err());
 }
+
+/// A history with an owner passkey from sequence 2: the verifier requires the
+/// assertion exactly from there, over the request's own approval digest.
+#[test]
+fn assessment_requires_owner_assertions_after_enrollment() {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64URL, Engine};
+    use p256::ecdsa::{signature::Signer, Signature, SigningKey as P256Key};
+    use sha2::{Digest, Sha256};
+    const ORIGIN: &str = "http://localhost:8765";
+    let owner = P256Key::from_slice(&[7u8; 32]).unwrap();
+    let assertion = |q: &Request| {
+        let challenge = B64URL.encode(hex::decode(digest(&q.approval.payload).unwrap()).unwrap());
+        let client = format!(
+            "{{\"type\":\"webauthn.get\",\"challenge\":\"{challenge}\",\"origin\":\"{ORIGIN}\"}}"
+        );
+        let mut auth = Sha256::digest(b"localhost").to_vec();
+        auth.extend_from_slice(&[0x05, 0, 0, 0, 0]);
+        let mut signed = auth.clone();
+        signed.extend_from_slice(&Sha256::digest(client.as_bytes()));
+        let signature: Signature = owner.sign(&signed);
+        PasskeyAssertion {
+            authenticator_data: B64URL.encode(auth),
+            client_data_json: B64URL.encode(client),
+            signature: B64URL.encode(signature.to_der().as_bytes()),
+        }
+    };
+    let s = setup();
+    let plain = s.t.clone();
+    let mut keyed = s.t.clone();
+    keyed.epoch = 2;
+    keyed.owner_passkey = Some(OwnerPasskey {
+        public_key: hex::encode(owner.verifying_key().to_sec1_point(false).as_bytes()),
+        rp_id: "localhost".into(),
+        origin: ORIGIN.into(),
+        from_sequence: 2,
+    });
+    let (rd, wd) = (s.dir.join("receiver"), s.dir.join("witness"));
+    let r1 = apply(&rd, &request(&s, 1, 0), &plain, &s.r, 100).unwrap();
+    witness(&wd, &r1, &plain, &s.w, 100).unwrap();
+    let mut q2 = request(&s, 2, 1);
+    q2.owner_assertion = Some(assertion(&q2));
+    let r2 = apply(&rd, &q2, &keyed, &s.r, 100).unwrap();
+    let cp = witness(&wd, &r2, &keyed, &s.w, 100).unwrap();
+    let p = export(&rd, cp.clone()).unwrap();
+    assess(&p, &keyed, &cp, 100).unwrap();
+    let mut stripped = p.clone();
+    stripped.requests[1].owner_assertion = None;
+    assert!(assess(&stripped, &keyed, &cp, 100).is_err());
+    let mut moved = p.clone();
+    moved.requests[0].owner_assertion = moved.requests[1].owner_assertion.clone();
+    assert!(assess(&moved, &keyed, &cp, 100).is_err());
+    assert!(assess(&p, &plain, &cp, 100).is_err());
+}

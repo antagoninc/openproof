@@ -23,9 +23,14 @@ time window. An assertion for one approval does not fit any other approval.
 1. Start the owner app. It is served at `http://localhost:PORT`. It still
    listens only on 127.0.0.1. WebAuthn does not accept IP addresses, so open
    the `localhost` link, not `127.0.0.1`.
-2. Optional: choose a fixed port with `--port`. Once a passkey is set up, the
-   app always reuses the registered port. A different `--port` is refused.
-3. Select **Set up passkey** and confirm on your device.
+2. Optional: choose a fixed port with `--port`. It is the review origin's port,
+   which the passkey is bound to. Once a passkey is set up, the app always
+   reuses the registered port; a different `--port` is refused. The workspace
+   runs on a second port, and no workspace page can produce an assertion that
+   the gate or the receiver accepts.
+3. Select **Set up passkey**. It opens the set-up page, a separate page that
+   runs no workspace code. Select **Set up passkey** there and confirm on your
+   device.
 4. The app checks the registration (its own challenge, `webauthn.create`, the
    exact origin, the `localhost` relying party, user presence and user
    verification, and an ES256 P-256 key).
@@ -37,16 +42,26 @@ time window. An assertion for one approval does not fit any other approval.
 
 From then on:
 
-1. Review the change. The dialog shows the exact content and its SHA-256.
+1. Review the change on the review page, on the passkey's origin. That origin
+   serves only the review and set-up pages, never the workspace's code. The
+   page shows the exact content first, and the SHA-256 that it computes
+   itself.
 2. Approve. The Rust approval gate signs the approval of the stored
    proposal, but only if the proposal still has the review binding that the
-   dialog showed. The gate keeps the signed approval as pending. A pending
-   approval cannot be executed. The dialog shows the approval digest and
-   stays open while your device asks for the passkey.
-3. Confirm with the passkey. The gate verifies the assertion against the
+   page showed. The gate keeps the signed approval as pending. A pending
+   approval cannot be executed.
+3. The page checks the approval before any passkey prompt
+   (`app/approval.js`): the document, the version and the content hash must be
+   those it shows, the approval must be valid now for at most 10 minutes, and
+   the digest it computes must equal the gate's. Then it
+   uses its own digest as the passkey challenge and shows it. The server never
+   chooses the challenge, so the passkey cannot sign content that the page did
+   not show. A mismatch stops with "The approval does not match the change
+   shown here", and nothing is approved.
+4. Confirm with the passkey. The gate verifies the assertion against the
    pending approval's digest. Then it stores the request with the assertion
    as approved. Only then is the action approved.
-4. Execute as before.
+5. Execute as before. The receiver verifies the assertion again.
 
 A pending approval is used once. It expires with the approval window (5
 minutes). A failed assertion changes nothing; review again or retry before
@@ -113,7 +128,9 @@ verifier applies the same rule across the trusts in an archive.
 
 - A compromised host can still change what the screen shows before you touch
   the passkey. The challenge binds the approval digest, not the pixels. Read
-  the content in the dialog and only confirm what you meant to approve.
+  the content on the review page and only confirm what you meant to approve.
+  The page's own check protects against defects in the owner app's server
+  side, not against code that controls the browser or the owner account.
 - Another local program can serve its own page at the same localhost address
   while the owner app is not running. It can then ask for an assertion. Only
   confirm a passkey prompt that you started from the owner app.
@@ -133,7 +150,9 @@ verifier applies the same rule across the trusts in an archive.
 
 ## Tests
 
-- Rust: `crates/openproof-witness/src/passkey.rs` (software P-256 keys).
+- Rust: `crates/openproof-receiver/src/passkey.rs` (software P-256 keys).
+- The review page's check and challenge: `scripts/tests/test_review_page.py`
+  (the digest against a Rust vector, and every single difference refused).
 - Go: `reference/go-witness/passkey_test.go`.
 - Approval gate: `crates/openproof-witness/src/gate_tests.rs` (pending
   approval not executable, assertion for another digest, replay, expiry,
@@ -142,4 +161,6 @@ verifier applies the same rule across the trusts in an archive.
   `scripts/witness_conformance.py`.
 - Python owner-app routes: `scripts/tests/test_passkey.py`.
 - Browser: `scripts/passkey_smoke.mjs` with the Chrome DevTools virtual
-  authenticator.
+  authenticator. It also changes the owner app's answer in flight (other
+  content, document, version or digest) and checks that the page refuses
+  before any prompt.

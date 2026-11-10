@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/openproof-core", "crates/openproof-cli", "crates/openproof-runtime", "crates/openproof-trust", "crates/openproof-witness"]
+members = ["crates/openproof-core", "crates/openproof-receiver", "crates/openproof-role", "crates/openproof-cli", "crates/openproof-runtime", "crates/openproof-trust", "crates/openproof-witness"]
 resolver = "2"
 
 [workspace.package]
@@ -22,4 +22,3 @@ zeroize = "1"
 libc = "0.2"
 p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std", "pkcs8"] }
 base64 = "0.22.1"
-rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "logging"] }

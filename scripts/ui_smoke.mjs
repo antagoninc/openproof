@@ -1,188 +1,116 @@
-// Browser-level fixture check using a fresh local Chrome profile and built-in CDP.
-// No external network or production owner home is used.
+// Browser-level workflow check in a fresh local Chrome profile, without a
+// passkey: propose, review on the separate review page, approve, execute,
+// retry. No external network or production owner home is used.
+//   OPENPROOF_CHROME=/path/to/chrome node scripts/ui_smoke.mjs OUT_DIR
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
+import { startChrome, until } from "./browser_cdp.mjs";
+
 const out = path.resolve(process.argv[2]);
 fs.mkdirSync(out, { recursive: false, mode: 0o700 });
 const root = path.resolve(import.meta.dirname, "..");
 const appLog = fs.openSync(path.join(out, "app.log"), "w");
 const app = spawn(
   path.join(root, "target/debug/openproof-witness"),
-  [
-    "owner-app",
-    "--home",
-    path.join(out, "home"),
-    "--session-file",
-    path.join(out, "session.json"),
-  ],
+  ["owner-app", "--home", path.join(out, "home"), "--session-file", path.join(out, "session.json")],
   { cwd: root, stdio: ["ignore", appLog, appLog] },
 );
-let chrome, ws;
-const delay = (ms) => new Promise((r) => setTimeout(r, ms));
-async function until(test) {
-  for (let i = 0; i < 200; i++) {
-    if (await test()) return;
-    await delay(100);
-  }
-  throw Error("UI condition timeout");
-}
+let b;
 try {
-  await until(() => fs.existsSync(path.join(out, "session.json")));
+  await until(() => fs.existsSync(path.join(out, "session.json")), "owner app start");
   const session = JSON.parse(fs.readFileSync(path.join(out, "session.json")));
-  const profile = path.join(out, "profile");
-  const log = fs.openSync(path.join(out, "chrome.log"), "w");
-  chrome = spawn(
-    process.env.OPENPROOF_CHROME ||
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    [
-      "--headless",
-      // Containers run as root, where Chrome refuses its sandbox.
-      ...(process.getuid?.() === 0 ? ["--no-sandbox"] : []),
-      "--disable-gpu",
-      "--disable-background-networking",
-      "--no-first-run",
-      "--remote-debugging-port=0",
-      "--user-data-dir=" + profile,
-      "about:blank",
-    ],
-    { stdio: ["ignore", log, log] },
-  );
-  await until(() => fs.existsSync(path.join(profile, "DevToolsActivePort")));
-  const port = fs
-    .readFileSync(path.join(profile, "DevToolsActivePort"), "utf8")
-    .split("\n")[0];
-  const tabs = await (await fetch("http://127.0.0.1:" + port + "/json")).json();
-  ws = new WebSocket(tabs.find((t) => t.type === "page").webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    ws.onopen = resolve;
-    ws.onerror = reject;
-  });
-  let next = 0;
-  const pending = new Map();
-  ws.onmessage = (e) => {
-    const m = JSON.parse(e.data);
-    if (m.id) {
-      const p = pending.get(m.id);
-      pending.delete(m.id);
-      m.error ? p.reject(Error(m.error.message)) : p.resolve(m.result);
-    }
-  };
-  const send = (method, params = {}) =>
-    new Promise((resolve, reject) => {
-      const id = ++next;
-      pending.set(id, { resolve, reject });
-      ws.send(JSON.stringify({ id, method, params }));
-    });
-  const evaluate = async (expression) => {
-    const r = await send("Runtime.evaluate", {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-    });
-    if (r.exceptionDetails) throw Error("Browser evaluation failed");
-    return r.result.value;
-  };
-  await send("Page.enable");
-  await send("Emulation.setDeviceMetricsOverride", {
-    width: 1440,
-    height: 1300,
-    deviceScaleFactor: 1,
-    mobile: false,
-  });
+  b = await startChrome(out);
+  const { evaluate, send, api } = b;
+  const message = () => evaluate("document.getElementById('message')?.textContent ?? ''");
   await send("Page.navigate", { url: session.url });
-  await until(() =>
-    evaluate(
-      "document.getElementById('message')?.textContent.includes('workspace is ready')",
-    ),
-  );
+  await until(async () => (await message()).includes("workspace is ready"), "workspace");
+
+  // 1. Propose. Untrusted text must render as text on the review page.
+  const content = "<script>window.untrustedExecuted=true</script> Public browser test";
   await evaluate(
-    "document.querySelector('[name=document]').value='browser-fixture';document.querySelector('[name=content]').value='<script>window.untrustedExecuted=true</script> Public browser test';document.getElementById('proposal-form').requestSubmit()",
+    "document.querySelector('[name=document]').value='browser-fixture';" +
+      `document.querySelector('[name=content]').value=${JSON.stringify(content)};` +
+      "document.getElementById('proposal-form').requestSubmit()",
   );
-  await until(() =>
-    evaluate(
-      "document.querySelector('#items button')?.textContent==='Review change'",
-    ),
+  await until(
+    () =>
+      evaluate(
+        "location.pathname==='/review' && document.getElementById('review')?.hidden === false",
+      ),
+    "review page",
   );
-  await evaluate("document.querySelector('#items button').click()");
-  await until(() => evaluate("document.getElementById('review').open"));
+  const review = await evaluate(`({
+    approveDisabled: document.getElementById('approve').disabled,
+    executed: window.untrustedExecuted === true,
+    content: document.getElementById('review-content').textContent,
+    digest: document.getElementById('review-digest').textContent,
+    scripts: performance.getEntriesByType('resource').map((e) => new URL(e.name).pathname)
+      .filter((p) => p.endsWith('.js')).sort(),
+    styles: [...document.styleSheets].map((s) => new URL(s.href).pathname),
+  })`);
+  const sha = crypto.createHash("sha256").update(content).digest("hex");
   if (
-    !(await evaluate(
-      "document.getElementById('approve').disabled && !window.untrustedExecuted && document.getElementById('review-content').textContent.includes('<script>')",
-    ))
+    !review.approveDisabled ||
+    review.executed ||
+    review.content !== content ||
+    review.digest !== sha
   )
-    throw Error("Review isolation failed");
-  const reviewPng = await send("Page.captureScreenshot", { format: "png" });
-  fs.writeFileSync(
-    path.join(out, "review.png"),
-    Buffer.from(reviewPng.data, "base64"),
-  );
+    throw Error("Review page did not show the exact text safely: " + JSON.stringify(review));
+  // The review page runs only its own code and the two shared modules.
+  if (JSON.stringify(review.scripts) !== JSON.stringify(["/approval.js", "/common.js", "/review.js"]))
+    throw Error("Review page loaded other scripts: " + review.scripts);
+  if (JSON.stringify(review.styles) !== JSON.stringify(["/base.css"]))
+    throw Error("Review page loaded other styles: " + review.styles);
+  await b.screenshot(path.join(out, "review.png"));
+
+  // 2. Approve (no passkey in this home), back on the workspace.
   await evaluate(
     "document.getElementById('confirm').click();document.getElementById('approve').click()",
   );
-  await until(() =>
-    evaluate(
-      "document.querySelector('#items button')?.textContent==='Execute approved action'",
-    ),
+  await until(
+    async () => (await evaluate("location.pathname")) === "/" && (await message()).includes("Approved."),
+    "approval",
   );
-  await evaluate("document.querySelector('#items button').click()");
-  await until(() =>
-    evaluate(
-      "document.querySelector('#items small')?.textContent.includes('Verified locally')",
-    ),
+  // The workspace ignores clicks until its start-up check has finished.
+  await until(() => evaluate("document.getElementById('health-list')?.hidden === false"), "health");
+  const row = "[...document.querySelectorAll('.item')].find((r) => r.textContent.includes('browser-fixture'))";
+  await until(
+    () => evaluate(row + "?.querySelector('button')?.textContent==='Execute approved action'"),
+    "execute button",
   );
-  await evaluate("document.querySelector('#items button').click()");
-  await until(() =>
-    evaluate(
-      "!busy && document.getElementById('message').textContent.includes('did not create a second update')",
-    ),
-  );
-  const status = await evaluate("api('status')");
-  if (status.items[0].document_version !== 1)
-    throw Error("Duplicate execution");
-  await evaluate("document.getElementById('recovery-refresh').click()");
-  await until(() =>
-    evaluate(
-      "!busy && document.querySelector('#recovery-items button')?.textContent==='Recover existing result'",
-    ),
-  );
-  await evaluate("document.querySelector('#recovery-items button').click()");
-  await until(() =>
-    evaluate(
-      "!busy && document.getElementById('message').textContent.includes('Existing result recovered')",
-    ),
-  );
-  const recovery = await evaluate("api('recovery')");
+
+  // 3. Execute, then retry the same action: no second update.
+  await evaluate(row + ".querySelector('button').click()");
+  await until(async () => (await api("status")).items[0]?.stage === "Verified locally", "execution");
+  await until(() => evaluate(row + "?.querySelector('button')?.textContent==='Recover / refresh'"), "refresh button");
+  await evaluate(row + ".querySelector('button').click()");
+  await until(async () => (await message()).includes("Retrying never creates a second update"), "retry");
+  const status = await api("status");
+  if (status.items.length !== 1 || status.items[0].document_version !== 1)
+    throw Error("Duplicate execution: " + JSON.stringify(status.items));
+  const recovery = await api("recovery");
   if (recovery.heads.receiver !== 1 || recovery.heads.witness !== 1)
-    throw Error("Recovery duplicated an effect");
-  const screenshot = await send("Page.captureScreenshot", {
-    format: "png",
-    captureBeyondViewport: true,
-  });
-  fs.writeFileSync(
-    path.join(out, "app.png"),
-    Buffer.from(screenshot.data, "base64"),
-  );
+    throw Error("Unexpected history: " + JSON.stringify(recovery.heads));
+  await b.screenshot(path.join(out, "app.png"));
   fs.writeFileSync(
     path.join(out, "result.json"),
     JSON.stringify(
       {
         passed: true,
-        proposal_review_approval_execution_retry: true,
+        review_on_separate_page: true,
+        review_page_scripts: review.scripts,
         untrusted_content_rendered_as_text: true,
         version_after_retry: 1,
-        receipt_only_recovery: true,
         external_model_calls: 0,
       },
       null,
       2,
     ),
   );
-  console.log(
-    "Browser workflow passed: exact review, approval, execution, retry and text isolation.",
-  );
+  console.log("Browser workflow passed: separate review page, approval, execution, retry, text isolation.");
 } finally {
-  if (ws) ws.close();
-  if (chrome) chrome.kill();
+  if (b) b.close();
   app.kill();
 }

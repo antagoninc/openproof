@@ -1,6 +1,6 @@
-//! Minimal HTTP/1.1 for the two local servers: one request per connection,
+//! Minimal HTTP/1.1 for the role service and the owner app: one request per connection,
 //! bounded headers and body, no chunked encoding, no keep-alive.
-use openproof_witness::Result;
+use crate::Result;
 use std::io::{Read, Write};
 
 pub struct Request {
@@ -202,12 +202,6 @@ pub fn integer(m: &serde_json::Map<String, serde_json::Value>, k: &str) -> Resul
     m.get(k)
         .and_then(|v| v.as_u64())
         .ok_or_else(|| format!("{k} must be a nonnegative integer").into())
-}
-
-/// Constant-time equality for secrets.
-pub fn same_secret(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 #[cfg(test)]

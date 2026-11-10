@@ -74,6 +74,11 @@ class Improvements(unittest.TestCase):
             other = call(["keygen", d / "other.secret"])["public_key"]
             with self.assertRaises(Exception):
                 release.verify(v, envelope, other, "local-test", source)
+            (v / "openproof-role").write_text("tampered")
+            with self.assertRaises(ValueError):
+                release.verify(v, envelope, public, "local-test", source)
+            (v / "openproof-role").write_text("fixture")
+            release.verify(v, envelope, public, "local-test", source)
             (v / "openproof").write_text("tampered")
             with self.assertRaises(ValueError):
                 release.verify(v, envelope, public, "local-test", source)

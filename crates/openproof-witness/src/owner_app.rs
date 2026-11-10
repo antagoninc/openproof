@@ -1,13 +1,18 @@
 //! Local owner app. Loopback only, explicit session, exact review binding.
 //! The Rust approval gate makes every approval decision; this server keeps
 //! the session, the CSRF token and the one-use review and assertion tokens.
+//!
+//! It serves two origins. The review origin is the passkey's origin: only the
+//! review and passkey set-up pages run there, so no other page can obtain a
+//! passkey assertion that the gate or the receiver accepts. The workspace
+//! (dashboard) runs on a second port. Only the fixed tables between the
+//! `TCB:` markers are trusted (docs/TCB.md): the review page checks every
+//! approval it is given against what it shows.
 use crate::broker::{self, read_json, replace_json, save, ROLES};
-use crate::http::{
-    fields, integer, read_request, respond, same_secret, strict_json, text, Request,
-};
-use crate::serve::random_hex;
+use crate::http::{fields, integer, read_request, respond, strict_json, text, Request};
 use crate::{arg, call};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use openproof_witness::files::random_hex;
 use openproof_witness::{now, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -20,10 +25,74 @@ use std::{
 
 const RP_ID: &str = "localhost";
 const TOKEN_LIFE: Duration = Duration::from_secs(300);
-const INDEX: &[u8] = include_bytes!("../../../app/index.html");
-const SCRIPT: &[u8] = include_bytes!("../../../app/app.js");
-const STYLE: &[u8] = include_bytes!("../../../app/app.css");
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+// TCB:begin
+/// The two origins the app serves.
+#[derive(Clone, Copy, PartialEq)]
+enum Site {
+    Review,
+    Workspace,
+}
+/// The files and requests each origin serves. The review origin serves only
+/// the review and set-up pages, their modules and their requests.
+const REVIEW_FILES: [&str; 7] = [
+    "/review",
+    "/setup",
+    "/review.js",
+    "/setup.js",
+    "/common.js",
+    "/approval.js",
+    "/base.css",
+];
+const WORKSPACE_FILES: [&str; 6] = [
+    "/",
+    "/app.js",
+    "/common.js",
+    "/approval.js",
+    "/base.css",
+    "/app.css",
+];
+const REVIEW_POSTS: [&str; 5] = [
+    "/api/review",
+    "/api/approve",
+    "/api/approve/passkey",
+    "/api/passkey/register/begin",
+    "/api/passkey/register/finish",
+];
+fn serves(site: Site, path: &str, post: bool) -> bool {
+    match (site, post) {
+        (Site::Review, false) => REVIEW_FILES.contains(&path) || path == "/api/session",
+        (Site::Review, true) => REVIEW_POSTS.contains(&path),
+        (Site::Workspace, false) => {
+            !REVIEW_FILES.contains(&path) || WORKSPACE_FILES.contains(&path)
+        }
+        (Site::Workspace, true) => !REVIEW_POSTS.contains(&path),
+    }
+}
+/// The pages, each a separate document. The review and passkey set-up pages
+/// load only their own script, the shared modules and base.css: never the
+/// workspace's app.js or app.css (docs/TCB.md).
+const PAGES: [(&str, &[u8], &str); 10] = [
+    ("/", include_bytes!("../../../app/index.html"), HTML),
+    ("/review", include_bytes!("../../../app/review.html"), HTML),
+    ("/setup", include_bytes!("../../../app/setup.html"), HTML),
+    ("/app.js", include_bytes!("../../../app/app.js"), JS),
+    ("/review.js", include_bytes!("../../../app/review.js"), JS),
+    ("/setup.js", include_bytes!("../../../app/setup.js"), JS),
+    ("/common.js", include_bytes!("../../../app/common.js"), JS),
+    (
+        "/approval.js",
+        include_bytes!("../../../app/approval.js"),
+        JS,
+    ),
+    ("/base.css", include_bytes!("../../../app/base.css"), CSS),
+    ("/app.css", include_bytes!("../../../app/app.css"), CSS),
+];
+const HTML: &str = "text/html; charset=utf-8";
+const JS: &str = "text/javascript; charset=utf-8";
+const CSS: &str = "text/css; charset=utf-8";
+/// Every page runs only its own origin's files from this table.
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+// TCB:end
 const INVALID: &str =
     "Request or review no longer valid. Refresh and review the exact action again.";
 const INTERRUPTED: &str =
@@ -39,7 +108,9 @@ struct Owner {
     home: PathBuf,
     token: String,
     csrf: String,
+    /// The review origin, which is the passkey's origin.
     origin: String,
+    workspace: String,
     reviews: HashMap<String, Review>,
     assertions: HashMap<String, Review>,
     registration: Option<(String, Instant)>,
@@ -50,6 +121,12 @@ type Reply = std::result::Result<Value, (u16, String)>;
 
 fn invalid<E>(_: E) -> (u16, String) {
     (409, INVALID.into())
+}
+
+/// Constant-time equality for secrets.
+fn same_secret(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn token() -> String {
@@ -256,7 +333,7 @@ impl Owner {
                 "status": match age { None => "none", Some(a) if !(0..=300).contains(&a) => "needs_refresh", _ => "recent_record_only" },
                 "scope": "Saved checkpoint age is not a fresh verification or proof that no newer event exists."
             },
-            "tls": {"status": if services { "local_role_services" } else { "local_roles_no_tls" }, "certificates": []},
+            "services": if services { "separate_accounts" } else { "same_account" },
             "scope": "Read-only observations of configured role state. No trust reset, automatic approval or execution."
         }))
     }
@@ -371,9 +448,11 @@ impl Owner {
                 at: Instant::now(),
             },
         );
+        // No challenge is sent: the review page checks `approval` against the
+        // content it shows and derives the passkey challenge from it itself.
         Ok(
             json!({"status": "passkey_required", "id": id, "assertion_token": t,
-                  "approval_sha256": r["approval_sha256"], "challenge": r["challenge"],
+                  "approval": r["approval"], "approval_sha256": r["approval_sha256"],
                   "rp_id": r["rp_id"], "credential_id": self.passkey()?.1}),
         )
     }
@@ -508,7 +587,7 @@ impl Owner {
                 ));
             }
         }
-        crate::serve::write_new(
+        openproof_witness::files::write_new(
             &folder.join(format!("{id}.zip")),
             &crate::zip::store(&files)?,
         )?;
@@ -523,17 +602,27 @@ impl Owner {
         })
     }
 
-    fn host_ok(&self, r: &Request) -> bool {
-        r.header("Host") == self.origin.strip_prefix("http://")
+    fn site_origin(&self, site: Site) -> &str {
+        match site {
+            Site::Review => &self.origin,
+            Site::Workspace => &self.workspace,
+        }
+    }
+
+    fn host_ok(&self, r: &Request, site: Site) -> bool {
+        r.header("Host") == self.site_origin(site).strip_prefix("http://")
+    }
+
+    fn session(&self) -> Value {
+        json!({"csrf": self.csrf, "review": self.origin, "workspace": self.workspace})
     }
 
     fn get(&self, r: &Request) -> std::result::Result<(Vec<u8>, &'static str), (u16, String)> {
-        match r.path.as_str() {
-            "/" => return Ok((INDEX.to_vec(), "text/html; charset=utf-8")),
-            "/app.js" => return Ok((SCRIPT.to_vec(), "text/javascript; charset=utf-8")),
-            "/app.css" => return Ok((STYLE.to_vec(), "text/css; charset=utf-8")),
-            _ => {}
+        // TCB:begin
+        if let Some((_, body, kind)) = PAGES.iter().find(|(p, _, _)| *p == r.path) {
+            return Ok((body.to_vec(), kind));
         }
+        // TCB:end
         if !self.authenticated(r) {
             return Err((401, "Open this app using its local launcher".into()));
         }
@@ -551,7 +640,7 @@ impl Owner {
             )
         };
         match r.path.as_str() {
-            "/api/session" => Ok(as_json(json!({"csrf": self.csrf}))),
+            "/api/session" => Ok(as_json(self.session())),
             "/api/status" => self.status().map(as_json).map_err(failed),
             "/api/recovery" => self.recovery().map(as_json).map_err(failed),
             p => match p.strip_prefix("/api/download/") {
@@ -576,8 +665,8 @@ impl Owner {
         }
     }
 
-    fn post(&mut self, r: &Request) -> (Reply, bool) {
-        if !self.host_ok(r) || r.header("Origin") != Some(self.origin.as_str()) {
+    fn post(&mut self, r: &Request, site: Site) -> (Reply, bool) {
+        if !self.host_ok(r, site) || r.header("Origin") != Some(self.site_origin(site)) {
             return (Err((403, "Origin rejected".into())), false);
         }
         if r.header("Content-Type") != Some("application/json")
@@ -595,7 +684,7 @@ impl Owner {
                 .and_then(|m| m["token"].as_str())
                 .is_some_and(|t| same_secret(t, &self.token));
             return if ok {
-                (Ok(json!({"csrf": self.csrf})), true)
+                (Ok(self.session()), true)
             } else {
                 (Err((403, "Session rejected".into())), false)
             };
@@ -672,17 +761,28 @@ impl Owner {
         (reply, false)
     }
 
-    fn handle(&mut self, stream: &mut TcpStream, r: Request) -> Result<()> {
+    fn handle(&mut self, stream: &mut TcpStream, r: Request, site: Site) -> Result<()> {
         let mut headers = vec![
             ("X-Content-Type-Options", "nosniff".to_string()),
             ("Referrer-Policy", "no-referrer".to_string()),
             ("Content-Security-Policy", CSP.to_string()),
+            ("Cross-Origin-Opener-Policy", "same-origin".to_string()),
         ];
-        let (code, kind, body) = if !self.host_ok(&r) {
+        let post = r.method == "POST";
+        // TCB:begin
+        let served = self.host_ok(&r, site) && serves(site, &r.path, post);
+        // TCB:end
+        let (code, kind, body) = if !self.host_ok(&r, site) {
             (
                 403,
                 "application/json",
                 serde_json::to_vec(&json!({"error": "Host rejected"}))?,
+            )
+        } else if !served {
+            (
+                404,
+                "application/json",
+                serde_json::to_vec(&json!({"error": "Not served on this origin"}))?,
             )
         } else if r.method == "GET" {
             match self.get(&r) {
@@ -693,8 +793,8 @@ impl Owner {
                     serde_json::to_vec(&json!({"error": e}))?,
                 ),
             }
-        } else if r.method == "POST" {
-            let (reply, cookie) = self.post(&r);
+        } else if post {
+            let (reply, cookie) = self.post(&r, site);
             if cookie {
                 headers.push((
                     "Set-Cookie",
@@ -775,6 +875,7 @@ pub fn main(rest: &[&str]) -> Result<()> {
         token: token(),
         csrf: token(),
         origin: String::new(),
+        workspace: String::new(),
         reviews: HashMap::new(),
         assertions: HashMap::new(),
         registration: None,
@@ -791,9 +892,12 @@ pub fn main(rest: &[&str]) -> Result<()> {
         }
         port = registered;
     }
-    let listener = bind(port)?;
+    // The review origin is the passkey's; the workspace gets its own port.
+    let review = bind(port)?;
+    let workspace = bind(0)?;
     // Bind loopback but advertise localhost: WebAuthn rejects IP addresses.
-    owner.origin = format!("http://{RP_ID}:{}", listener.local_addr()?.port());
+    owner.origin = format!("http://{RP_ID}:{}", review.local_addr()?.port());
+    owner.workspace = format!("http://{RP_ID}:{}", workspace.local_addr()?.port());
     if demo
         && owner.status()?["items"]
             .as_array()
@@ -805,9 +909,12 @@ pub fn main(rest: &[&str]) -> Result<()> {
             "content": "Welcome to OpenProof. This public demonstration stores exactly this text in the local receiver database. Review, approve, and execute are separate decisions. No model was called."}),
         )?;
     }
-    let url = format!("{}/#{}", owner.origin, owner.token);
+    let url = format!("{}/#{}", owner.workspace, owner.token);
     if let Some(path) = session {
-        save(&path, &json!({"url": url, "pid": std::process::id()}))?;
+        save(
+            &path,
+            &json!({"url": url, "review_origin": owner.origin, "pid": std::process::id()}),
+        )?;
     }
     if open {
         let opener = if cfg!(target_os = "macos") {
@@ -818,13 +925,28 @@ pub fn main(rest: &[&str]) -> Result<()> {
         let _ = std::process::Command::new(opener).arg(&url).spawn();
     }
     println!(
-        "OpenProof owner app is running at {} (use --open to establish your owner session).",
-        owner.origin
+        "OpenProof owner app is running at {}, with reviews at {} (use --open to establish your owner session).",
+        owner.workspace, owner.origin
     );
     // Read each request on its own thread, so an idle browser connection
     // cannot stall the app; handle requests one at a time under the lock.
     let owner = std::sync::Arc::new(std::sync::Mutex::new(owner));
     let open = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let reviews = {
+        let (owner, open) = (owner.clone(), open.clone());
+        std::thread::spawn(move || serve(review, Site::Review, owner, open))
+    };
+    serve(workspace, Site::Workspace, owner, open);
+    let _ = reviews.join();
+    Ok(())
+}
+
+fn serve(
+    listener: TcpListener,
+    site: Site,
+    owner: std::sync::Arc<std::sync::Mutex<Owner>>,
+    open: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         if open.load(std::sync::atomic::Ordering::SeqCst) >= 32 {
@@ -837,13 +959,12 @@ pub fn main(rest: &[&str]) -> Result<()> {
             let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
             if let Ok(r) = read_request(&mut stream, 32768) {
                 if let Ok(mut o) = owner.lock() {
-                    let _ = o.handle(&mut stream, r);
+                    let _ = o.handle(&mut stream, r, site);
                 }
             }
             open.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         });
     }
-    Ok(())
 }
 
 #[cfg(test)]

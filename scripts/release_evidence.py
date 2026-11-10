@@ -9,31 +9,36 @@ sys.path.insert(0, str(ROOT / "reference/python"))
 import openproof_ref as ref
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-DOMAIN = b"OpenProof/v1/local-build-evidence/2\0"
-OLD_DOMAIN = b"OpenProof/v1/local-build-evidence/1\0"
-FILES = [
-    "openproof",
-    "openproof-witness",
-    "provenance.json",
-    "source-manifest.json",
-    "steps.json",
-    "openproof-go-verify",
-]
+DOMAINS = {v: b"OpenProof/v1/local-build-evidence/%d\0" % v for v in (1, 2, 3)}
+FILES_BY_VERSION = {
+    1: [
+        "openproof",
+        "openproof-witness",
+        "provenance.json",
+        "source-manifest.json",
+        "steps.json",
+    ],
+}
+FILES_BY_VERSION[2] = FILES_BY_VERSION[1] + ["openproof-go-verify"]
+# Version 3 adds the role service binary that local_roles.py installs.
+FILES_BY_VERSION[3] = FILES_BY_VERSION[2] + ["openproof-role"]
+VERSION = 3
+FILES = FILES_BY_VERSION[VERSION]
 
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def payload(validation, builder, version=2):
+def payload(validation, builder, version=VERSION):
     v = Path(validation)
     ref.text(builder)
     steps = ref.read(v / "steps.json")
     if not steps or any(s["exit_code"] != 0 for s in steps):
         raise ValueError("validation failed")
-    if version not in [1, 2]:
+    if version not in FILES_BY_VERSION:
         raise ValueError("Unknown build evidence version")
-    files = FILES if version == 2 else FILES[:-1]
+    files = FILES_BY_VERSION[version]
     return dict(
         version="openproof-local-build/" + str(version),
         builder=builder,
@@ -53,7 +58,7 @@ def sign(validation, key, builder, out):
     result = dict(
         payload=p,
         signature=Ed25519PrivateKey.from_private_bytes(seed)
-        .sign(DOMAIN + ref.canonical(p))
+        .sign(DOMAINS[VERSION] + ref.canonical(p))
         .hex(),
     )
     with Path(out).open("x") as f:
@@ -64,7 +69,7 @@ def sign(validation, key, builder, out):
 def verify(validation, envelope, key, builder, source):
     s = ref.read(envelope)
     ref.fields(s, ["payload", "signature"])
-    version = {"openproof-local-build/1": 1, "openproof-local-build/2": 2}.get(
+    version = {"openproof-local-build/%d" % v: v for v in FILES_BY_VERSION}.get(
         s["payload"].get("version")
     )
     expected = payload(validation, builder, version)
@@ -75,9 +80,7 @@ def verify(validation, envelope, key, builder, source):
     ):
         raise ValueError("build identity or artifacts mismatch")
     signature = ref.hx(s["signature"], 64)
-    ref.public(key).verify(
-        signature, (DOMAIN if version == 2 else OLD_DOMAIN) + ref.canonical(expected)
-    )
+    ref.public(key).verify(signature, DOMAINS[version] + ref.canonical(expected))
     return {
         "status": "local_build_signature_verified",
         "builder": builder,

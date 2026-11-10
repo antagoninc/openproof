@@ -35,14 +35,14 @@ OpenProof makes three guarantees, each with a stated condition. [docs/TCB.md](do
 **Propose → review → approve with passkey → execute → witness → verify offline.**
 
 1. An agent **proposes** a document change through the MCP tools. Agent tools can propose and execute approved work. They cannot approve.
-2. The owner **reviews** the exact content and its SHA-256 in the local owner app and **approves** it with a passkey. The passkey signs the approval digest, so the gesture is bound to that exact document, version, content and nonce.
+2. The owner **reviews** the exact content and its SHA-256 on the owner app's review page and **approves** it with a passkey. The page checks the signed approval against what it shows and computes the passkey challenge itself. The passkey signs the approval digest, so the gesture is bound to that exact document, version, content and nonce.
 3. The owner separately **executes**. The receiver checks the approval and the passkey assertion, applies the change atomically and signs a receipt. A retry returns the original receipt without a second change.
 4. The **witness** adds the receipt to its ordered history and signs a checkpoint.
 5. The owner **exports** the history. Anyone **verifies** it offline with the Go verifier.
 
 The owner app renders model-provided text as text, never as commands or executable HTML. Interrupted actions are recovered without dispatching unexecuted work.
 
-Experimental features are outside the guarantees and outside the first audit scope: planned key handover, the S3 storage pilot, remote mTLS role services and certificate lifecycle, archive retention, and the isolated report agent. See [docs/TCB.md](docs/TCB.md#outside-the-trusted-code).
+Experimental features are outside the guarantees and outside the first audit scope: planned key handover, the S3 storage pilot, archive retention, and the isolated report agent. Role services on other hosts are not part of this version. See [docs/TCB.md](docs/TCB.md#outside-the-trusted-code).
 
 ## Quick start
 
@@ -57,13 +57,14 @@ python3 scripts/quickstart.py
 
 The first-run command builds the Rust binary and the Go verifier and starts a fresh owner workspace with an unapproved sample. No model account is needed. Use `--check --no-open` to build only.
 
-Everything on the trusted path is one Rust binary, `openproof-witness`:
+The owner runs one Rust binary, `openproof-witness`. With [separate role accounts](docs/LOCAL-ROLES.md), the receiver and the witness run a second, smaller one, `openproof-role`, which holds only their code:
 
 | Command | What it runs |
 |---|---|
 | `openproof-witness owner-app --home HOME --open` | The local owner app: review, passkey approval, execution, evidence export |
 | `openproof-witness mcp HOME` | The MCP stdio server for agents: propose and commit only, never approve |
-| `openproof-witness serve-role ...` | The mTLS role service for a receiver or witness under its own account ([LOCAL-ROLES.md](docs/LOCAL-ROLES.md)) |
+| `openproof-role serve ...` | The role service for a receiver or witness under its own account, on a Unix socket |
+| `openproof-tool ...` | Operator and test commands. Not on the main path and not trusted |
 
 On macOS, after setup, double-click **[Open OpenProof.command](Open%20OpenProof.command)**. The app uses a private local home under `outputs/owner-home` and listens only on loopback. Keep the terminal open while using it; Control-C stops the app.
 
@@ -105,7 +106,7 @@ The Go verifier is separately implemented without calling Rust, but it shares pr
 
 ## Validation
 
-The local run on 8 Nov 2026 passed 145 Rust tests, the Go tests, the Go/Rust cross-implementation suites, 42 Python tests of the Rust owner app, MCP server, broker and role service, both browser workflows and the separate-role-account test on Linux. The earlier v0.9 milestone record is in the [sanitized validation summary](docs/VALIDATION.md), which explains scope and limitations. Generated logs, private keys, databases, browser sessions and runtime homes are deliberately excluded from Git.
+The local run on 10 Nov 2026 (Linux) passed 152 Rust tests, the Go tests, the Go/Rust cross-implementation suites, 60 Python tests of the Rust owner app, MCP server, broker, role service, review page and trusted-code count, both browser workflows, and the two separate-role-account tests as root. The earlier v0.9 milestone record is in the [sanitized validation summary](docs/VALIDATION.md), which explains scope and limitations. Generated logs, private keys, databases, browser sessions and runtime homes are deliberately excluded from Git.
 
 To run the complete validation, install `cargo-audit` and use a fresh directory:
 
@@ -121,10 +122,12 @@ The workflow performs checks and builds only. It does not publish packages, uplo
 | Path | Purpose | In the trusted code |
 |---|---|---|
 | `crates/openproof-core` | OPEC-1 canonical bytes, domain-separated signatures, strict parsing | Yes |
-| `crates/openproof-witness` | Receiver, witness, approval gate, passkey check, broker, owner app, MCP server, role service | Yes, except `rotation.rs` and `storage.rs` |
-| `app` | The owner app's page and script, built into the binary | Yes (G1) |
+| `crates/openproof-receiver` | The receiver and the witness: admission, passkey check, receipts, checkpoints | Yes |
+| `crates/openproof-role` | The role service binary | Yes |
+| `crates/openproof-witness` | Approval gate, broker, owner app, MCP server, operator tools (`openproof-tool`) | Only the owner app's table of page files: the receiver and the review page check the rest |
+| `app` | The owner app's pages, built into the binary | The review page and its modules (G1); not the workspace or the passkey set-up page |
 | `reference/go-witness` | Separate Go verifier of exported histories | Yes (G3) |
-| `scripts/local_roles.py` | Installer for separate role accounts | Yes, when installed |
+| `scripts/local_roles.py` | Installer and status check for separate role accounts | Yes (G1) |
 | `crates/openproof-runtime`, `crates/openproof-trust`, `crates/openproof-cli` | Original v1 action bundles | No; kept for compatibility |
 | `integrations/trace` | Links OpenProof approvals to TRACE Trust Records as `approval-outcome` references | No |
 | other `scripts` | Tests, conformance suites, validation and demonstrations | No |

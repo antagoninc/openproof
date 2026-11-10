@@ -1,0 +1,16 @@
+[package]
+name = "openproof-role"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "The OpenProof role service: the receiver or the witness under its own account"
+[dependencies]
+openproof-core = { path = "../openproof-core" }
+openproof-receiver = { path = "../openproof-receiver" }
+serde_json.workspace = true
+base64.workspace = true
+libc.workspace = true
+serde.workspace = true
+ed25519-dalek.workspace = true

@@ -127,7 +127,7 @@ Only the emitted receiver history is covered. Rejected proposals, operations per
 ## Offline evidence and timeline
 
 ```sh
-target/debug/openproof-witness verify /trusted/trust.json /trusted/checkpoint.json < package.json
+target/debug/openproof-tool verify /trusted/trust.json /trusted/checkpoint.json < package.json
 outputs/local-venv/bin/python scripts/witness_workflow.py timeline package.json --trust /trusted/trust.json --checkpoint /trusted/checkpoint.json --out timeline.html
 ```
 

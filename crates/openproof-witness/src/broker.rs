@@ -2,8 +2,8 @@
 //! catch the witness up, and keep verified evidence. Agent tools reach only
 //! `propose` and `commit`; approval stays in the gate and the owner app.
 use crate::http::strict_json;
-use crate::serve::{random_hex, replace, write_new};
 use crate::{arg, call};
+use openproof_witness::files::{random_hex, replace, write_new};
 use openproof_witness::Result;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};

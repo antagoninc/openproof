@@ -1,28 +1,20 @@
-//! Owner-side mTLS client for role services. Only an owner home that contains
-//! `service-client.json` sends role commands to services. Callers cannot choose
-//! destinations, certificates or operations beyond the fixed mapping below.
+//! Owner-side client for the role services (docs/LOCAL-ROLES.md). Only an owner
+//! home that contains `service-client.json` sends role commands to services.
+//! Callers cannot choose destinations or operations beyond the fixed mapping
+//! below. This code is not trusted for any guarantee: the receiver checks every
+//! request it is sent (docs/TCB.md).
 use openproof_witness::Result;
-use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName};
 use serde_json::{json, Value};
 use std::{
     io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
     path::Path,
-    sync::atomic::{AtomicBool, Ordering},
-    sync::Arc,
     time::Duration,
 };
-
-/// Set by the role service, for all its threads, so its own commands never forward.
-static LOCAL_ONLY: AtomicBool = AtomicBool::new(false);
-pub fn local_only() {
-    LOCAL_ONLY.store(true, Ordering::SeqCst);
-}
 
 /// The owner home and role for a role command whose state is `HOME/ROLE/state`
 /// in a home with a service client configuration.
 fn target<'a>(a: &[&'a str]) -> Option<(&'a Path, &'static str)> {
-    if LOCAL_ONLY.load(Ordering::SeqCst) || a.len() < 2 {
+    if a.len() < 2 {
         return None;
     }
     let state = Path::new(a[1]);
@@ -54,31 +46,6 @@ pub fn takes_input(a: &[&str]) -> bool {
                 | "install-signed")
         )
     )
-}
-
-pub fn provider() -> Arc<rustls::crypto::CryptoProvider> {
-    Arc::new(rustls::crypto::ring::default_provider())
-}
-
-pub fn certificates(path: &str) -> Result<Vec<CertificateDer<'static>>> {
-    let certs = CertificateDer::pem_file_iter(path)?.collect::<std::result::Result<Vec<_>, _>>()?;
-    if certs.is_empty() {
-        return Err(format!("no certificate in {path}").into());
-    }
-    Ok(certs)
-}
-
-/// A private key that only its owner can read.
-pub fn private_key(path: &str) -> Result<PrivateKeyDer<'static>> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let m = std::fs::symlink_metadata(path)?;
-        if !m.is_file() || m.permissions().mode() & 0o077 != 0 {
-            return Err("TLS key must be a private regular file".into());
-        }
-    }
-    Ok(PrivateKeyDer::from_pem_file(path)?)
 }
 
 /// Send a role command to its service. `None` when the command stays local.
@@ -119,59 +86,40 @@ pub fn forward(a: &[&str], value: Option<&Value>) -> Result<Option<Value>> {
         ),
         // The service installs with its own pinned root, never a caller-selected one.
         ["install-signed", ..] => ("install-trust", json!({"signed": need(value)?})),
-        _ => return Err("Remote role administration must be performed by that operator".into()),
+        _ => return Err("Role administration must be performed by that role's operator".into()),
     };
     post(home, role, op, &body).map(Some)
 }
 
+#[cfg(unix)]
 fn post(home: &Path, role: &str, op: &str, body: &Value) -> Result<Value> {
+    use std::os::unix::net::UnixStream;
     let config = crate::http::strict_json(&std::fs::read(home.join("service-client.json"))?)?;
     let m = crate::http::fields(&config, &["version", "receiver", "witness"], &[])?;
-    if m["version"] != "openproof-service-client/1" {
-        return Err("Unknown service client version".into());
+    if m["version"] != "openproof-service-client/2" {
+        return Err(
+            "This home names role services from an earlier version. Reinstall them (docs/LOCAL-ROLES.md)."
+                .into(),
+        );
     }
-    let t = crate::http::fields(&m[role], &["url", "ca", "cert", "key"], &[])?;
-    let url = crate::http::text(t, "url")?;
-    let authority = url
-        .strip_prefix("https://")
-        .map(|r| r.strip_suffix('/').unwrap_or(r))
-        .filter(|r| !r.is_empty() && !r.contains(['/', '@', '?', '#']))
-        .ok_or("Explicit HTTPS origin required")?;
-    let (host, port) = authority.rsplit_once(':').ok_or("Explicit port required")?;
-    let port: u16 = port.parse()?;
-    let mut roots = rustls::RootCertStore::empty();
-    for c in certificates(crate::http::text(t, "ca")?)? {
-        roots.add(c)?;
+    let t = crate::http::fields(&m[role], &["socket"], &[])?;
+    let socket = Path::new(crate::http::text(t, "socket")?);
+    if !socket.is_absolute() {
+        return Err("The role service socket must be an absolute path".into());
     }
-    let config = rustls::ClientConfig::builder_with_provider(provider())
-        .with_protocol_versions(&[&rustls::version::TLS13])?
-        .with_root_certificates(roots)
-        .with_client_auth_cert(
-            certificates(crate::http::text(t, "cert")?)?,
-            private_key(crate::http::text(t, "key")?)?,
-        )?;
-    let name = ServerName::try_from(host.to_string())?;
-    let address = (host, port).to_socket_addrs()?.next().ok_or("no address")?;
-    let tcp = TcpStream::connect_timeout(&address, Duration::from_secs(10))?;
-    tcp.set_read_timeout(Some(Duration::from_secs(20)))?;
-    tcp.set_write_timeout(Some(Duration::from_secs(20)))?;
-    let conn = rustls::ClientConnection::new(Arc::new(config), name)?;
-    let mut tls = rustls::StreamOwned::new(conn, tcp);
+    let mut stream = UnixStream::connect(socket)?;
+    stream.set_read_timeout(Some(Duration::from_secs(20)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(20)))?;
     let raw = serde_json::to_vec(body)?;
     write!(
-        tls,
-        "POST /v1/{op} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        stream,
+        "POST /v1/{op} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         raw.len()
     )?;
-    tls.write_all(&raw)?;
-    tls.flush()?;
+    stream.write_all(&raw)?;
+    stream.flush()?;
     let mut response = Vec::new();
-    match Read::take(&mut tls, 1_200_000).read_to_end(&mut response) {
-        Ok(_) => {}
-        // A peer that closes without close_notify after a complete reply.
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof && !response.is_empty() => {}
-        Err(e) => return Err(e.into()),
-    }
+    Read::take(&mut stream, 1_200_000).read_to_end(&mut response)?;
     let split = response
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -187,4 +135,9 @@ fn post(home: &Path, role: &str, op: &str, body: &Value) -> Result<Value> {
         .into());
     }
     serde_json::from_slice(payload).map_err(Into::into)
+}
+
+#[cfg(not(unix))]
+fn post(_: &Path, _: &str, _: &str, _: &Value) -> Result<Value> {
+    Err("Role services need Unix sockets".into())
 }

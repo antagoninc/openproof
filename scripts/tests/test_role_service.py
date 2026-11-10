@@ -1,98 +1,100 @@
-"""The Rust mTLS role service (`openproof-witness serve-role`) and the
+"""The role service (`openproof-role serve`) on a Unix socket, and the
 owner-side routing to it."""
 
-import http.client, json, shutil, socket, ssl, subprocess, sys, tempfile, unittest
+import json, os, shutil, socket, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from witness_workflow import BINARY, Broker, initialize, call, ref
-from tls_fixtures import certificates
+from witness_workflow import Broker, initialize, call, ref
+
+ROLE = ROOT / "target/debug/openproof-role"
 
 
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+def serve(role, state, key, trust, signed, sock, uids, accept=True):
+    command = [
+        str(ROLE),
+        "serve",
+        "--role",
+        role,
+        "--state",
+        str(state),
+        "--key",
+        str(key),
+        "--trust",
+        str(trust),
+        "--signed-trust",
+        str(signed),
+        "--socket",
+        str(sock),
+    ]
+    for uid in uids:
+        command += ["--client-uid", str(uid)]
+    if accept:
+        command.append("--accept-trust-updates")
+    return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def post(sock, path, value):
+    """One request to a role service; returns (status, JSON body)."""
+    raw = json.dumps(value).encode()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(10)
+        s.connect(str(sock))
+        s.sendall(
+            f"POST {path} HTTP/1.1\r\nContent-Type: application/json\r\n"
+            f"Content-Length: {len(raw)}\r\n\r\n".encode() + raw
+        )
+        response = b""
+        while chunk := s.recv(65536):
+            response += chunk
+    head, _, body = response.partition(b"\r\n\r\n")
+    return int(head.split(b" ")[1]), json.loads(body)
 
 
 class Services:
-    """Role services for one home's role folders, with fixture TLS."""
+    """Role services for one home's role folders."""
 
     def __init__(
-        self, d, home, pki, keys=None, accept=True, roles=("receiver", "witness")
+        self,
+        d,
+        sockets,
+        home,
+        keys=None,
+        accept=True,
+        roles=("receiver", "witness"),
+        uids=None,
     ):
-        self.d, self.ports, self.processes = d, {}, []
+        self.sockets, self.processes = {}, []
         for role in roles:
-            port = free_port()
             role_dir = d / ("svc-" + role)
             role_dir.mkdir(exist_ok=True)
             for name in ["trust.json", "trust-signed.json"]:
                 shutil.copy(home / name, role_dir / name)
-            command = [
-                str(BINARY),
-                "serve-role",
-                "--role",
+            sock = sockets / (role + ".sock")
+            p = serve(
                 role,
-                "--state",
-                str(home / role / "state"),
-                "--key",
-                str((keys or {}).get(role, home / role / "key.secret")),
-                "--trust",
-                str(role_dir / "trust.json"),
-                "--signed-trust",
-                str(role_dir / "trust-signed.json"),
-                "--cert",
-                str(d / "server.pem"),
-                "--tls-key",
-                str(d / "server.key"),
-                "--ca",
-                str(d / "ca.pem"),
-                "--client-fingerprint",
-                pki["client"],
-                "--port",
-                str(port),
-            ] + (["--accept-trust-updates"] if accept else [])
-            p = subprocess.Popen(
-                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                home / role / "state",
+                (keys or {}).get(role, home / role / "key.secret"),
+                role_dir / "trust.json",
+                role_dir / "trust-signed.json",
+                sock,
+                uids or [os.getuid()],
+                accept,
             )
-            assert b"listening" in p.stdout.readline(), p.stderr.read()
-            self.ports[role] = port
+            line = p.stdout.readline()
+            assert b"listening" in line, p.stderr.read()
+            self.sockets[role] = sock
             self.processes.append(p)
 
     def config(self):
-        d = self.d
         return {
-            "version": "openproof-service-client/1",
-            **{
-                role: {
-                    "url": "https://127.0.0.1:" + str(port),
-                    "ca": str(d / "ca.pem"),
-                    "cert": str(d / "client.pem"),
-                    "key": str(d / "client.key"),
-                }
-                for role, port in self.ports.items()
-            },
+            "version": "openproof-service-client/2",
+            **{role: {"socket": str(s)} for role, s in self.sockets.items()},
         }
 
-    def request(self, role, path, value, identity="client"):
-        context = ssl.create_default_context(cafile=self.d / "ca.pem")
-        context.minimum_version = ssl.TLSVersion.TLSv1_3
-        if identity:
-            context.load_cert_chain(
-                self.d / (identity + ".pem"), self.d / (identity + ".key")
-            )
-        c = http.client.HTTPSConnection(
-            "127.0.0.1", self.ports[role], context=context, timeout=10
-        )
-        try:
-            c.request(
-                "POST", path, json.dumps(value), {"Content-Type": "application/json"}
-            )
-            r = c.getresponse()
-            return r.status, json.loads(r.read())
-        finally:
-            c.close()
+    def request(self, role, path, value):
+        return post(self.sockets[role], path, value)
 
     def close(self):
         for p in self.processes:
@@ -105,34 +107,50 @@ class Services:
 class RoleServiceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=ROOT / "outputs")
+        # Socket paths are limited to about 100 bytes: keep them short.
+        self.short = tempfile.TemporaryDirectory(prefix="opsock-")
         self.d = Path(self.tmp.name)
+        self.s = Path(self.short.name)
         self.h = self.d / "home"
         initialize(self.h)
-        self.pki = certificates(self.d)
         self.services = None
 
     def tearDown(self):
         if self.services:
             self.services.close()
         self.tmp.cleanup()
+        self.short.cleanup()
 
-    def test_mtls_identity_scope_tamper_replay_and_witness(self):
-        s = self.services = Services(self.d, self.h, self.pki)
-        with self.assertRaises((ssl.SSLError, ConnectionError, OSError)):
-            s.request("receiver", "/v1/head", {}, None)
-        self.assertEqual(s.request("receiver", "/v1/head", {}, "unlisted")[0], 403)
+    def approved(self, content, version=0):
+        return call(
+            ["approve", self.h / "authority/key.secret", self.h / "trust.json"],
+            {"document": "report", "expected_version": version, "content": content},
+        )
+
+    def test_unlisted_accounts_are_refused(self):
+        other = os.getuid() + 1
+        s = self.services = Services(self.d, self.s, self.h, uids=[other])
+        # The service closes the connection without reading or answering.
+        for path, value in [
+            ("/v1/head", {}),
+            ("/v1/receive", {"request": self.approved("x")}),
+        ]:
+            try:
+                answer = s.request("receiver", path, value)
+            except (ConnectionError, ValueError, IndexError):
+                answer = None
+            self.assertIsNone(answer)
+        self.assertEqual(call(["head", self.h / "receiver/state"])["count"], 0)
+
+    def test_scope_tamper_replay_and_witness(self):
+        s = self.services = Services(self.d, self.s, self.h)
+        # The socket is open to every account; the peer check decides.
+        self.assertEqual(os.stat(s.sockets["receiver"]).st_mode & 0o777, 0o666)
         # Each role serves only its own operations.
         self.assertEqual(s.request("receiver", "/v1/checkpoint", {})[0], 400)
         self.assertEqual(s.request("witness", "/v1/receive", {"request": {}})[0], 400)
         self.assertEqual(s.request("receiver", "/v1/head", {"extra": 1})[0], 400)
-        q = call(
-            ["approve", self.h / "authority/key.secret", self.h / "trust.json"],
-            {
-                "document": "report",
-                "expected_version": 0,
-                "content": "Public TLS fixture",
-            },
-        )
+        q = self.approved("Public fixture")
         bad = dict(q, content="changed")
         self.assertEqual(s.request("receiver", "/v1/receive", {"request": bad})[0], 409)
         code, r = s.request("receiver", "/v1/receive", {"request": q})
@@ -143,10 +161,42 @@ class RoleServiceTests(unittest.TestCase):
         self.assertEqual(
             s.request("receiver", "/v1/document", {"document": "absent"})[0], 404
         )
+        code, doc = s.request("receiver", "/v1/document", {"document": "report"})
+        self.assertEqual(
+            (code, doc), (200, {"version": 1, "content": "Public fixture"})
+        )
         code, cp = s.request("witness", "/v1/witness", {"receipt": r})
         self.assertEqual(code, 200)
         self.assertEqual(cp["payload"]["count"], 1)
         self.assertEqual(s.request("receiver", "/v1/head", {})[1]["count"], 1)
+        code, again = s.request("witness", "/v1/checkpoint", {})
+        self.assertEqual((code, again["payload"]["head"]), (200, cp["payload"]["head"]))
+        code, page = s.request("receiver", "/v1/page", {"start": 1, "checkpoint": cp})
+        self.assertEqual((code, len(page["receipts"])), (200, 1))
+        code, package = s.request("receiver", "/v1/export", {"checkpoint": cp})
+        self.assertEqual((code, len(package["receipts"])), (200, 1))
+        code, proof = s.request(
+            "witness", "/v1/tlog-inclusion", {"sequence": 1, "size": 1}
+        )
+        self.assertEqual((code, proof), (200, {"proof": []}))
+
+    def test_socket_path_must_be_a_socket_or_absent(self):
+        taken = self.s / "receiver.sock"
+        taken.write_text("not a socket")
+        h = self.h
+        p = serve(
+            "receiver",
+            h / "receiver/state",
+            h / "receiver/key.secret",
+            h / "trust.json",
+            h / "trust-signed.json",
+            taken,
+            [os.getuid()],
+        )
+        out, err = p.communicate(timeout=20)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"not a socket", err)
+        self.assertEqual(taken.read_text(), "not a socket")
 
     def test_broker_routes_only_owner_configured_services(self):
         # Role keys live only with the services; the owner home keeps none.
@@ -154,10 +204,10 @@ class RoleServiceTests(unittest.TestCase):
         for role in ["receiver", "witness"]:
             keys[role] = self.d / (role + ".secret")
             (self.h / role / "key.secret").rename(keys[role])
-        s = self.services = Services(self.d, self.h, self.pki, keys)
+        s = self.services = Services(self.d, self.s, self.h, keys)
         (self.h / "service-client.json").write_text(json.dumps(s.config()))
         b = Broker(self.h)
-        p = b.propose("report", 0, "TLS-backed owner workflow")
+        p = b.propose("report", 0, "Service-backed owner workflow")
         import contextlib, io
 
         with contextlib.redirect_stdout(io.StringIO()):
@@ -167,7 +217,8 @@ class RoleServiceTests(unittest.TestCase):
         result = b.commit(p["proposal_id"])
         self.assertEqual(result["verification_status"], "local_consistency_verified")
         self.assertEqual(b.commit(p["proposal_id"])["document_version"], 1)
-        # Administration is not forwarded to the operator's service.
+        # Administration is neither forwarded to the service nor run locally
+        # by the operator tool on a state that a service owns.
         with self.assertRaisesRegex(RuntimeError, "operator"):
             call(["revoke", self.h / "receiver/state", "00" * 32])
         # A new trust epoch reaches both services through the opt-in route.
@@ -181,6 +232,11 @@ class RoleServiceTests(unittest.TestCase):
                 p["proposal_id"], reader=lambda _: "APPROVE " + p["content_sha256"][:12]
             )
         self.assertEqual(b.commit(p["proposal_id"])["document_version"], 2)
+        # A home that still names version 1 (mTLS) services is told to reinstall.
+        old = dict(version="openproof-service-client/1", receiver={}, witness={})
+        (self.h / "service-client.json").write_text(json.dumps(old))
+        with self.assertRaisesRegex(RuntimeError, "Reinstall"):
+            call(["head", self.h / "receiver/state"])
 
     def test_trust_updates_are_opt_in_and_keep_role_keys(self):
         def signed(change, step):
@@ -192,7 +248,7 @@ class RoleServiceTests(unittest.TestCase):
             )
 
         s = self.services = Services(
-            self.d, self.h, self.pki, accept=False, roles=("receiver",)
+            self.d, self.s, self.h, accept=False, roles=("receiver",)
         )
         code, body = s.request(
             "receiver", "/v1/install-trust", {"signed": signed(lambda t: None, 1)}
@@ -202,7 +258,7 @@ class RoleServiceTests(unittest.TestCase):
             (400, "Trust updates are not accepted by this operator"),
         )
         s.close()
-        s = self.services = Services(self.d, self.h, self.pki, roles=("receiver",))
+        s = self.services = Services(self.d, self.s, self.h, roles=("receiver",))
         other = call(["keygen", self.d / "other.secret"])["public_key"]
         code, body = s.request(
             "receiver",
@@ -211,45 +267,55 @@ class RoleServiceTests(unittest.TestCase):
         )
         self.assertEqual((code, body["error"]), (400, "Role key change refused"))
         epoch = ref.read(self.h / "trust.json")["epoch"] + 3
+        code, status = s.request("receiver", "/v1/status", {})
+        self.assertEqual((code, status["owner_passkey"]), (200, None))
+        # A trust with an owner passkey: the service then reports it itself.
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import serialization
+
+        point = (
+            ec.generate_private_key(ec.SECP256R1())
+            .public_key()
+            .public_bytes(
+                serialization.Encoding.X962,
+                serialization.PublicFormat.UncompressedPoint,
+            )
+            .hex()
+        )
+        passkey = dict(
+            public_key=point,
+            rp_id="localhost",
+            origin="http://localhost:8765",
+            from_sequence=1,
+        )
         code, body = s.request(
-            "receiver", "/v1/install-trust", {"signed": signed(lambda t: None, 3)}
+            "receiver",
+            "/v1/install-trust",
+            {"signed": signed(lambda t: t.update(owner_passkey=passkey), 3)},
         )
         self.assertEqual((code, body), (200, {"installed_epoch": epoch}))
-        # The service restarts cleanly from the trust files it wrote.
+        code, status = s.request("receiver", "/v1/status", {})
+        self.assertEqual((code, status["epoch"]), (200, epoch))
+        self.assertEqual(status["owner_passkey"], passkey)
+        # The service restarts cleanly from the trust files it wrote, and
+        # replaces its own stale socket.
         self.assertEqual(ref.read(self.d / "svc-receiver/trust.json")["epoch"], epoch)
         s.close()
         self.services = Services.__new__(Services)
         self.services.processes = []
-        p = subprocess.Popen(
-            [
-                str(BINARY),
-                "serve-role",
-                "--role",
-                "receiver",
-                "--state",
-                str(self.h / "receiver/state"),
-                "--key",
-                str(self.h / "receiver/key.secret"),
-                "--trust",
-                str(self.d / "svc-receiver/trust.json"),
-                "--signed-trust",
-                str(self.d / "svc-receiver/trust-signed.json"),
-                "--cert",
-                str(self.d / "server.pem"),
-                "--tls-key",
-                str(self.d / "server.key"),
-                "--ca",
-                str(self.d / "ca.pem"),
-                "--client-fingerprint",
-                self.pki["client"],
-                "--port",
-                "0",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        p = serve(
+            "receiver",
+            self.h / "receiver/state",
+            self.h / "receiver/key.secret",
+            self.d / "svc-receiver/trust.json",
+            self.d / "svc-receiver/trust-signed.json",
+            self.s / "receiver.sock",
+            [os.getuid()],
         )
         self.services.processes.append(p)
         self.assertIn(b"listening", p.stdout.readline())
+        code, body = post(self.s / "receiver.sock", "/v1/head", {})
+        self.assertEqual((code, body), (200, {"count": 0}))
 
 
 if __name__ == "__main__":

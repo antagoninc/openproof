@@ -1,5 +1,6 @@
 use super::*;
 use p256::ecdsa::{signature::Signer, Signature, SigningKey as P256Key};
+use sha2::{Digest, Sha256};
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -458,4 +459,34 @@ fn earlier_homes_are_imported_once() {
     let late = hash(b"late");
     write("approved", &late, serde_json::to_string(&q).unwrap());
     assert_eq!(state(&h, &late), "unknown");
+}
+
+/// The review page computes the passkey challenge itself (app/approval.js).
+/// This vector is checked there too (scripts/tests/test_review_page.py).
+fn approval_vector() -> Approval {
+    let key = |b: u8| hex::encode(SigningKey::from_bytes(&[b; 32]).verifying_key().to_bytes());
+    Approval {
+        version: V.into(),
+        authority: key(1),
+        document: "project-status".into(),
+        expected_version: 7,
+        content_sha256: hash("Exact text, café ✓\n".as_bytes()),
+        nonce: "ab".repeat(32),
+        receiver: key(2),
+        not_before: 1_794_000_000,
+        expires_at: 1_794_000_300,
+    }
+}
+
+#[test]
+fn approval_digest_vector_matches_the_review_page() {
+    let a = approval_vector();
+    assert_eq!(
+        serde_json::to_string(&a).unwrap(),
+        include_str!("../../../scripts/tests/approval_vector.json").trim()
+    );
+    assert_eq!(
+        digest(&a).unwrap(),
+        "65b0894aab66bc7074fe773218831975386c4b7234177650f492f06529c9218e"
+    );
 }
