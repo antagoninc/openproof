@@ -20,9 +20,13 @@ cannot produce. The witness is still on the same computer, so G2 still needs
 an independent witness operator.
 
 Commands (the Python standard library only; use the system Python):
-  sudo /usr/bin/python3 -I scripts/local_roles.py install --home HOME
+  sudo /usr/bin/python3 -I scripts/local_roles.py install --home HOME [--publish]
   /usr/bin/python3 -I BASE/libexec/local_roles.py status --home HOME
   sudo /usr/bin/python3 -I scripts/local_roles.py uninstall --home HOME
+
+With `--publish`, the receiver also writes each approved document as a file
+in BASE/published, which only its account can change
+(docs/PROTECTED-FILES.md).
 
 Run `install` only from a checkout you have just pulled and checked: it copies
 the role code and this script from the checkout into a root-owned location.
@@ -35,9 +39,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ROLES = ("receiver", "witness")
-VERSION = "openproof-local-roles/2"
-# Records this script can still uninstall: version 1 used loopback mTLS.
-UNINSTALLABLE = {"openproof-local-roles/1", VERSION}
+VERSION = "openproof-local-roles/3"
+# Records this script can still uninstall: version 1 used loopback mTLS, and
+# version 2 had no protected files.
+UNINSTALLABLE = {"openproof-local-roles/1", "openproof-local-roles/2", VERSION}
 # The only code the role services run: one root-owned copy of this binary.
 BINARY = "target/debug/openproof-role"
 MAC = platform.system() == "Darwin"
@@ -347,7 +352,7 @@ def socket_path(base, role):
     return base / "sockets" / role / "service.sock"
 
 
-def service_command(code, role_dir, role, socket_file, owner):
+def service_command(code, role_dir, role, socket_file, owner, publish=None):
     return [
         str(code / "openproof-role"),
         "serve",
@@ -369,6 +374,7 @@ def service_command(code, role_dir, role, socket_file, owner):
         "--client-uid",
         "0",
         "--accept-trust-updates",
+        *(["--publish", str(publish)] if publish else []),
     ]
 
 
@@ -552,6 +558,7 @@ def _move_roles(
     staging,
     before,
     backup,
+    publish,
 ):
     say("3/7 Create the service accounts")
     for role in ROLES:
@@ -574,10 +581,21 @@ def _move_roles(
         folder.mkdir(mode=0o755)
         os.chown(folder, accounts[role].pw_uid, accounts[role].pw_gid)
         os.chmod(folder, 0o755)
+    if publish:
+        # Protected files: every account can read this folder, and only the
+        # receiver account can change it.
+        publish.mkdir(mode=0o755)
+        os.chown(publish, accounts["receiver"].pw_uid, accounts["receiver"].pw_gid)
+        os.chmod(publish, 0o755)
     say("5/7 Start the role services")
     for role in ROLES:
         command = service_command(
-            code, roles_dir[role], role, socket_path(base, role), owner
+            code,
+            roles_dir[role],
+            role,
+            socket_path(base, role),
+            owner,
+            publish if role == "receiver" else None,
         )
         start_service(manager, base, role, accounts[role], command, roles_dir[role])
     for role in ROLES:
@@ -660,7 +678,7 @@ def same_volume(home, base):
         )
 
 
-def install(home, base, users, manager):
+def install(home, base, users, manager, publish=False):
     if os.geteuid() != 0:
         raise RuntimeError("Run install with sudo.")
     home = home.resolve()
@@ -681,7 +699,7 @@ def install(home, base, users, manager):
                 raise RuntimeError(f"{home / role / need} is missing.")
     owner_entry = pwd.getpwuid(owner)
     with home_lock(home, owner_entry):
-        for left in ["sockets", *ROLES]:
+        for left in ["sockets", "published", *ROLES]:
             if (base / left).exists():
                 raise RuntimeError(
                     f"{base / left} already exists. Run uninstall first or move it aside."
@@ -715,6 +733,7 @@ def install(home, base, users, manager):
             [code], owner, "The role services would run code the owner can change."
         )
         accounts = {}
+        published = base / "published" if publish else None
         roles_dir = {role: base / role for role in ROLES}
         backup = base / ("owner-backup-" + time.strftime("%Y%m%dT%H%M%S"))
         try:
@@ -731,6 +750,7 @@ def install(home, base, users, manager):
                 staging,
                 before,
                 backup,
+                published,
             )
         except BaseException:
             say("Install failed. Undo the partial install and restore the owner home.")
@@ -742,6 +762,9 @@ def install(home, base, users, manager):
             return_roles(backup, home, owner_entry)
             for role in ROLES:
                 stop_service(manager, base, role)
+            if (base / "published").exists():  # Before its account is deleted.
+                shutil.rmtree(base / "published")
+            for role in ROLES:
                 if role in accounts:  # Only accounts this install created.
                     delete_account(users[role])
                 shutil.rmtree(roles_dir[role], ignore_errors=True)
@@ -765,6 +788,7 @@ def install(home, base, users, manager):
             manager=manager,
             users=users,
             sockets={role: str(socket_path(base, role)) for role in ROLES},
+            publish=str(published) if published else None,
             base=str(base),
             backup=str(backup),
             installed_at=int(time.time()),
@@ -828,13 +852,41 @@ def status(home, base):
     # The receiver service reports the trust it admits under. With an owner
     # passkey in it, every new change needs an assertion from that passkey.
     try:
-        passkey = ask(record["sockets"]["receiver"], "status").get("owner_passkey")
+        answer = ask(record["sockets"]["receiver"], "status")
     except Exception:
-        passkey = None
+        answer = {}
+    passkey = answer.get("owner_passkey")
     report["passkey_required_by_receiver"] = passkey is not None
     if passkey is not None:
         report["receiver_passkey_origin"] = passkey["origin"]
+    if record.get("publish"):
+        report["protected_files"] = protected_files(
+            record, owner, answer.get("published") or {}
+        )
     return report
+
+
+def protected_files(record, owner, answer):
+    """Whether the owner account can change the folder of protected files or
+    anything on the path to it, and what the receiver service says about it.
+    `not_published` names the documents whose files do not have the current
+    content (a name with a capital letter, or a failed write); `null` means
+    the service did not accept the folder."""
+    folder = Path(record["publish"])
+    try:
+        refuse_writable([folder], owner.pw_uid, "")
+        s = os.lstat(folder)
+        account = pwd.getpwuid(s.st_uid).pw_name
+        # A sticky folder passes the check above, but every account can add to it.
+        safe = account == record["users"]["receiver"] and not s.st_mode & 0o022
+    except (RuntimeError, KeyError, OSError):
+        safe = False
+    return dict(
+        folder=str(folder),
+        owner_cannot_change=safe,
+        receiver_writes_here=answer.get("folder") == str(folder),
+        not_published=answer.get("not_published"),
+    )
 
 
 def uninstall(home, base):
@@ -850,6 +902,9 @@ def uninstall(home, base):
         say("1/4 Stop the role services")
         for role in ROLES:
             stop_service(record["manager"], base, role)
+        # The protected files are copies. Remove them while their account exists.
+        if (base / "published").exists():
+            shutil.rmtree(base / "published")
         before = heads(base)
         say("2/4 Return the role keys and state to the owner home")
         # Prepare the returned folders where the owner cannot reach, check
@@ -915,13 +970,20 @@ def main():
     p.add_argument(
         "--manager", choices=["launchd", "systemd", "manual"], default=d["manager"]
     )
+    p.add_argument(
+        "--publish",
+        action="store_true",
+        help="With install: also write each approved document as a protected file",
+    )
     p.add_argument("--receiver-account", default=d["users"]["receiver"])
     p.add_argument("--witness-account", default=d["users"]["witness"])
     a = p.parse_args()
     users = {"receiver": a.receiver_account, "witness": a.witness_account}
     try:
+        if a.publish and a.command != "install":
+            raise RuntimeError("--publish is an option of install.")
         if a.command == "install":
-            result = install(a.home, a.base, users, a.manager)
+            result = install(a.home, a.base, users, a.manager, a.publish)
         elif a.command == "status":
             result = status(a.home, a.base)
         else:

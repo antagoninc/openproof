@@ -8,7 +8,7 @@ guarantee. Reviewers and auditors start here.
 
 `scripts/tcb_count.py` makes the counts below: non-blank lines, without Rust
 test modules or Go test files. Validation runs it with `--check`, which fails
-when the total is over the budget in that script (4,750 lines), when a source
+when the total is over the budget in that script (4,890 lines), when a source
 file of the trusted crates is not listed, when a trusted crate depends on
 another workspace crate, when the review origin serves or loads a file that is
 not listed, or when the totals in this file differ from the count. Update this file in the same change that adds or removes trusted code.
@@ -111,17 +111,18 @@ they did not mean to approve. See the G1 row above.
 | File | Lines | G1 | G2 | G3 | Role |
 |---|---:|:-:|:-:|:-:|---|
 | `crates/openproof-core/src/lib.rs` | 320 | ✓ | ✓ | | Canonical bytes (OPEC-1), domain-separated Ed25519 signatures, strict parsing |
-| `crates/openproof-receiver/src/lib.rs` | 642 | ✓ | ✓ | | Trust, approvals, receiver admission and replay state, receipts, witness checkpoints, export |
+| `crates/openproof-receiver/src/lib.rs` | 644 | ✓ | ✓ | | Trust, approvals, receiver admission and replay state, receipts, witness checkpoints, export |
 | `crates/openproof-receiver/src/passkey.rs` | 255 | ✓ | | | Owner passkey: trust field validation, WebAuthn assertion check, passkey pin |
 | `crates/openproof-receiver/src/roles.rs` | 72 | ✓ | ✓ | | Root-signed trust install for a role state; verified export |
 | `crates/openproof-receiver/src/pages.rs` | 82 | ✓ | ✓ | | Bounded history pages; the paged store bound inside admission |
+| `crates/openproof-receiver/src/publish.rs` | 54 | ✓ | | | Protected files: each approved document as a file in the receiver's folder ([PROTECTED-FILES.md](PROTECTED-FILES.md)) |
 | `crates/openproof-receiver/src/tlog.rs` | 198 | | ✓ | | The history as an RFC 6962 tree; C2SP checkpoints signed by the witness key |
 | `crates/openproof-receiver/src/clock.rs` | 9 | ✓ | ✓ | | The signing clock floor |
 | `crates/openproof-receiver/src/http.rs` | 197 | ✓ | ✓ | | Bounded HTTP/1.1 parsing; strict JSON (no duplicate keys or floats) |
 | `crates/openproof-receiver/src/keys.rs` | 45 | ✓ | ✓ | | Private key and bounded file reads |
 | `crates/openproof-receiver/src/files.rs` | 35 | ✓ | ✓ | | New and atomically replaced private files |
-| `crates/openproof-role/src/main.rs` | 381 | ✓ | ✓ | | The role service: Unix socket, peer account check, fixed operations, opt-in trust install that refuses role-key changes |
-| `scripts/local_roles.py` | 837 | ✓ | | | Installer (runs once as root): accounts, root-owned role binary, writability checks, a copy of the owner's role files made without following links, key and state move, daemons, uninstall; `status` |
+| `crates/openproof-role/src/main.rs` | 408 | ✓ | ✓ | | The role service: Unix socket, peer account check, fixed operations, opt-in trust install that refuses role-key changes, optional protected files |
+| `scripts/local_roles.py` | 896 | ✓ | | | Installer (runs once as root): accounts, root-owned role binary, writability checks, a copy of the owner's role files made without following links, key and state move, daemons, the optional folder for protected files, uninstall; `status` |
 | `app/review.html`, `app/review.js` | 298 | ✓ | | | The review page: what the owner sees and approves |
 | `app/approval.js` | 122 | ✓ | | | The approval check and the passkey challenge, in the page |
 | `app/common.js` | 86 | ✓ | | | Requests and text-only rendering for the review origin's pages |
@@ -130,10 +131,20 @@ they did not mean to approve. See the G1 row above.
 | `reference/go-witness/main.go`, `archive.go`, `passkey.go`, `tlog.go` | 921 | | | ✓ | Independent Go verifier of exported histories, including owner assertions and, when given, a quorum of witness cosignatures over the whole history |
 | `scripts/verify_history.py` | 68 | | | ✓ | Wrapper that runs the independently obtained Go verifier |
 
-Totals: G1 3,556 lines, G2 1,981, G3 989. Files shared between guarantees
-count in each. **Total trusted code: 4,743 lines**, down from about 9,700 under
-G1's condition before this change (8,370 listed, plus 1,350 for the role
-accounts).
+Totals: G1 3,698 lines, G2 2,010, G3 989. Files shared between guarantees
+count in each. **Total trusted code: 4,885 lines**. It was about 9,700 under
+G1's condition before the reduction of 10 Nov 2026 (8,370 listed, plus 1,350
+for the role accounts), and 4,743 after it. Protected files then added 142.
+
+## Protected files
+
+With `install --publish`, the receiver service also writes each approved
+document as a file that every local account can read and only the receiver's
+account can change ([PROTECTED-FILES.md](PROTECTED-FILES.md)). This adds no
+guarantee. The code that writes the files (`publish.rs`) runs in the receiver
+service, and the installer makes the folder and `status` checks it, so both
+are listed. The option is off by default; without it, `publish.rs` does not
+run.
 
 As before, style sheets are listed apart and not counted: the review origin's
 `app/base.css` (484 lines) is trusted for what the owner sees. The workspace's
@@ -191,7 +202,10 @@ tag `experiments-2026-11-08`, and the TLS role service at commit `51c0978`
      Python standard library only, never runs code from the checkout as root,
      never follows a link in the owner home, and `status` runs from a
      root-owned copy.
-5. Open. The aim is under 4,000 lines. Next candidates: a smaller installer
-   (`local_roles.py`, 837 lines, the largest trusted file after the receiver)
+5. Added (10 Nov 2026), 4,743 lines to 4,885: protected files. The receiver
+   service can write approved documents as files (`publish.rs`), and the
+   installer makes and checks their folder.
+6. Open. The aim is under 4,000 lines. Next candidates: a smaller installer
+   (`local_roles.py`, 896 lines, the largest trusted file)
    and the full-package export bound inside admission in
    `openproof-receiver/src/lib.rs`.

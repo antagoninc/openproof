@@ -5,7 +5,7 @@ Linux and only when OPENPROOF_ROLE_ACCOUNT_TEST=1. The role services are the
 Rust binary; nothing is downloaded.
 """
 
-import json, os, platform, pwd, subprocess, sys, tempfile, unittest
+import json, os, platform, pwd, shutil, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,6 +58,31 @@ print(json.dumps(out))
 """
 
 
+# Run as the owner account, or any other: every way to change a protected file.
+FILE_PROBE = r"""
+import json, os, sys
+folder, name, source = sys.argv[1], sys.argv[2], sys.argv[3]
+file = os.path.join(folder, name)
+out = {"read": open(file).read()}
+def attempt(label, action):
+    try:
+        action()
+        out[label] = "done"
+    except OSError as e:
+        out[label] = type(e).__name__
+attempt("write", lambda: open(file, "w").write("forged"))
+attempt("append", lambda: open(file, "a").write("forged"))
+attempt("delete", lambda: os.unlink(file))
+attempt("rename", lambda: os.rename(file, file + ".old"))
+attempt("create", lambda: open(os.path.join(folder, "forged"), "x").close())
+attempt("replace", lambda: os.replace(source, file))
+attempt("link", lambda: os.symlink("/etc/hostname", os.path.join(folder, "other")))
+attempt("mode", lambda: os.chmod(file, 0o666))
+attempt("folder_mode", lambda: os.chmod(folder, 0o777))
+print(json.dumps(out))
+"""
+
+
 @unittest.skipUnless(ENABLED, "needs root on Linux and OPENPROOF_ROLE_ACCOUNT_TEST=1")
 class LocalRolesTests(unittest.TestCase):
     def setUp(self):
@@ -98,7 +123,12 @@ class LocalRolesTests(unittest.TestCase):
             o.close()
 
     def local_roles(
-        self, command, user=None, script=ROOT / "scripts/local_roles.py", ok=True
+        self,
+        command,
+        user=None,
+        script=ROOT / "scripts/local_roles.py",
+        ok=True,
+        extra=(),
     ):
         # The system Python, isolated: the script needs only the standard library.
         args = [
@@ -111,6 +141,7 @@ class LocalRolesTests(unittest.TestCase):
         ]
         args += ["--base", str(BASE), "--manager", "manual"]
         args += ["--receiver-account", "optest-rcv", "--witness-account", "optest-wit"]
+        args += list(extra)
         r = subprocess.run(args, capture_output=True, text=True, user=user)
         if not ok:
             self.assertNotEqual(r.returncode, 0, r.stdout)
@@ -139,6 +170,138 @@ class LocalRolesTests(unittest.TestCase):
             elsewhere.rename(target)
         # The lock file the failed installs created belongs to the owner.
         self.assertEqual((self.h / ".broker.lock").stat().st_uid, self.owner.pw_uid)
+
+    def test_protected_files_cannot_be_changed_by_the_owner(self):
+        folder = BASE / "published"
+        record = self.local_roles("install", extra=["--publish"])
+        self.assertEqual(record["publish"], str(folder))
+        # The document approved before the install is a file already.
+        file = folder / "report"
+        self.assertEqual(file.read_text(), "first")
+        rcv = pwd.getpwnam("optest-rcv").pw_uid
+        self.assertEqual(
+            (file.stat().st_uid, file.stat().st_mode & 0o7777), (rcv, 0o644)
+        )
+        self.assertEqual(
+            (folder.stat().st_uid, folder.stat().st_mode & 0o7777), (rcv, 0o755)
+        )
+        # An approved change through the owner app changes the file.
+        self.assertEqual(self.commit("report", 1, "second")["document_version"], 2)
+        self.assertEqual(file.read_text(), "second")
+        self.commit("Notes", 0, "capital letter")
+        probe = Path(self.temp.name) / "file_probe.py"
+        probe.write_text(FILE_PROBE)
+        # A folder that every account can move files out of, on the same volume.
+        drop = BASE / "drop"
+        drop.mkdir()
+        os.chmod(drop, 0o777)
+        for user in [OWNER, "nobody"]:
+            source = drop / user
+            source.write_text("forged")
+            os.chown(source, pwd.getpwnam(user).pw_uid, -1)
+            r = subprocess.run(
+                [
+                    "/usr/bin/python3",
+                    "-I",
+                    str(probe),
+                    str(folder),
+                    "report",
+                    str(source),
+                ],
+                capture_output=True,
+                text=True,
+                user=user,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            seen = json.loads(r.stdout)
+            self.assertEqual(seen.pop("read"), "second")
+            self.assertEqual(set(seen.values()), {"PermissionError"}, (user, seen))
+            self.assertEqual(len(seen), 9)
+            self.assertEqual(source.read_text(), "forged")
+        shutil.rmtree(drop)
+        self.assertEqual(file.read_text(), "second")
+        self.assertEqual(sorted(os.listdir(folder)), ["report"])
+        copy = BASE / "libexec/local_roles.py"
+        expected = dict(
+            folder=str(folder),
+            owner_cannot_change=True,
+            receiver_writes_here=True,
+            not_published=["Notes"],
+        )
+        status = self.local_roles("status", user=OWNER, script=copy)
+        self.assertEqual(status["protected_files"], expected)
+        self.assertTrue(status["separated"])
+        self.assertEqual(self.local_roles("status", script=copy), status)
+        # A folder that another account can write (here: every account can
+        # add files to it) is reported, by the script and by the receiver
+        # service, and is repaired when it is safe again.
+        os.chmod(folder, 0o1777)
+        file.write_text("forged")
+        unsafe = self.local_roles("status", user=OWNER, script=copy)["protected_files"]
+        self.assertEqual(
+            unsafe, dict(expected, owner_cannot_change=False, not_published=None)
+        )
+        os.chmod(folder, 0o755)
+        status = self.local_roles("status", user=OWNER, script=copy)
+        self.assertEqual(status["protected_files"], expected)
+        self.assertEqual(file.read_text(), "second")
+        # So is a folder that does not belong to the receiver's account.
+        os.chown(folder, 0, 0)
+        unsafe = self.local_roles("status", user=OWNER, script=copy)["protected_files"]
+        self.assertEqual(
+            unsafe, dict(expected, owner_cannot_change=False, not_published=None)
+        )
+        os.chown(folder, rcv, -1)
+        # A file that belongs to the owner in the folder is reported too.
+        planted = folder / "planted"
+        planted.write_text("x")
+        os.chown(planted, self.owner.pw_uid, self.owner.pw_gid)
+        status = self.local_roles("status", script=copy)
+        self.assertFalse(status["protected_files"]["owner_cannot_change"])
+        planted.unlink()
+        self.assertIn(
+            "option of install",
+            self.local_roles("status", ok=False, extra=["--publish"]),
+        )
+        # An install record of the earlier version: uninstall, then install.
+        path = BASE / "install.json"
+        old = json.loads(path.read_text())
+        path.write_text(json.dumps(dict(old, version="openproof-local-roles/2")))
+        self.assertIn("earlier version", self.local_roles("status", ok=False))
+        self.local_roles("uninstall")
+        self.assertFalse(folder.exists())
+        self.assertEqual(self.commit("report", 2, "local")["document_version"], 3)
+        # Without the option there is no folder and no report of one.
+        record = self.local_roles("install")
+        self.assertIsNone(record["publish"])
+        self.assertFalse(folder.exists())
+        status = self.local_roles("status", script=copy)
+        self.assertNotIn("protected_files", status)
+        self.assertTrue(status["separated"])
+
+    def test_failed_install_with_protected_files_leaves_nothing(self):
+        import local_roles
+
+        def stop(path, seconds=20):
+            raise RuntimeError("stopped for the test")
+
+        users = {"receiver": "optest-rcv", "witness": "optest-wit"}
+        saved = local_roles.wait_for_socket
+        local_roles.wait_for_socket = stop
+        try:
+            with self.assertRaisesRegex(RuntimeError, "stopped for the test"):
+                local_roles.install(self.h, BASE, users, "manual", True)
+        finally:
+            local_roles.wait_for_socket = saved
+        # Only root-only backups stay in the role location.
+        left = [p.name for p in BASE.iterdir() if "-backup-" not in p.name]
+        self.assertEqual(left, [])
+        self.assertFalse(_exists("optest-rcv") or _exists("optest-wit"))
+        # The owner home works as before, and a later install succeeds.
+        self.assertEqual(self.commit("report", 1, "after")["document_version"], 2)
+        _chown(self.h, self.owner)
+        self.local_roles("install", extra=["--publish"])
+        self.assertEqual((BASE / "published/report").read_text(), "after")
 
     def test_install_separates_roles_and_uninstall_restores(self):
         from witness_workflow import call, renew

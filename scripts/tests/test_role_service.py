@@ -11,7 +11,7 @@ from witness_workflow import Broker, initialize, call, ref
 ROLE = ROOT / "target/debug/openproof-role"
 
 
-def serve(role, state, key, trust, signed, sock, uids, accept=True):
+def serve(role, state, key, trust, signed, sock, uids, accept=True, publish=None):
     command = [
         str(ROLE),
         "serve",
@@ -32,6 +32,8 @@ def serve(role, state, key, trust, signed, sock, uids, accept=True):
         command += ["--client-uid", str(uid)]
     if accept:
         command.append("--accept-trust-updates")
+    if publish:
+        command += ["--publish", str(publish)]
     return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
@@ -64,6 +66,7 @@ class Services:
         accept=True,
         roles=("receiver", "witness"),
         uids=None,
+        publish=None,
     ):
         self.sockets, self.processes = {}, []
         for role in roles:
@@ -81,6 +84,7 @@ class Services:
                 sock,
                 uids or [os.getuid()],
                 accept,
+                publish if role == "receiver" else None,
             )
             line = p.stdout.readline()
             assert b"listening" in line, p.stderr.read()
@@ -121,10 +125,10 @@ class RoleServiceTests(unittest.TestCase):
         self.tmp.cleanup()
         self.short.cleanup()
 
-    def approved(self, content, version=0):
+    def approved(self, content, version=0, document="report"):
         return call(
             ["approve", self.h / "authority/key.secret", self.h / "trust.json"],
-            {"document": "report", "expected_version": version, "content": content},
+            {"document": document, "expected_version": version, "content": content},
         )
 
     def test_unlisted_accounts_are_refused(self):
@@ -179,6 +183,130 @@ class RoleServiceTests(unittest.TestCase):
             "witness", "/v1/tlog-inclusion", {"sequence": 1, "size": 1}
         )
         self.assertEqual((code, proof), (200, {"proof": []}))
+
+    def test_protected_files(self):
+        folder = self.d / "published"
+        folder.mkdir(mode=0o755)
+        os.chmod(folder, 0o755)
+        h = self.h
+
+        def start(role="receiver", publish=folder):
+            return serve(
+                role,
+                h / role / "state",
+                h / role / "key.secret",
+                h / "trust.json",
+                h / "trust-signed.json",
+                self.s / (role + ".sock"),
+                [os.getuid()],
+                publish=publish,
+            )
+
+        # Only the receiver publishes, and only into a folder that no other
+        # account can write. Otherwise the service does not start.
+        for role, mode, message in [
+            ("witness", 0o755, b"to the receiver"),
+            ("receiver", 0o775, b"only this account can write"),
+        ]:
+            os.chmod(folder, mode)
+            p = start(role)
+            out, err = p.communicate(timeout=20)
+            self.assertNotEqual(p.returncode, 0)
+            self.assertIn(message, err)
+        os.chmod(folder, 0o755)
+        s = self.services = Services(self.d, self.s, h, publish=folder)
+        self.assertIsNone(s.request("witness", "/v1/status", {})[1]["published"])
+        empty = {"folder": str(folder), "not_published": []}
+        self.assertEqual(s.request("receiver", "/v1/status", {})[1]["published"], empty)
+        q = self.approved("Rule one\n", document="agent-rules")
+        refused = dict(q, content="Rule 1\n")
+        self.assertEqual(
+            s.request("receiver", "/v1/receive", {"request": refused})[0], 409
+        )
+        self.assertEqual(os.listdir(folder), [])
+        code, receipt = s.request("receiver", "/v1/receive", {"request": q})
+        self.assertEqual(code, 200)
+        file = folder / "agent-rules"
+        self.assertEqual(file.read_bytes(), b"Rule one\n")
+        self.assertEqual(file.stat().st_mode & 0o7777, 0o644)
+        import hashlib
+
+        self.assertEqual(
+            hashlib.sha256(file.read_bytes()).hexdigest(),
+            receipt["payload"]["content_sha256"],
+        )
+        # A replay, a refused request, a status request and a restart each
+        # write a lost or changed file again.
+        file.unlink()
+        self.assertEqual(
+            s.request("receiver", "/v1/receive", {"request": refused})[0], 409
+        )
+        self.assertEqual(file.read_bytes(), b"Rule one\n")
+        file.unlink()
+        self.assertEqual(
+            s.request("receiver", "/v1/receive", {"request": q})[1], receipt
+        )
+        self.assertEqual(file.read_bytes(), b"Rule one\n")
+        file.write_text("Rule two\n")
+        self.assertEqual(s.request("receiver", "/v1/status", {})[1]["published"], empty)
+        self.assertEqual(file.read_bytes(), b"Rule one\n")
+        s.close()
+        file.unlink()
+        (folder / ".left").write_text("x")
+        p = start()
+        s.processes = [p]
+        self.assertIn(b"listening", p.stdout.readline())
+        self.assertEqual(os.listdir(folder), ["agent-rules"])
+        self.assertEqual(file.read_bytes(), b"Rule one\n")
+        # The next version replaces the file. A name with a capital letter is
+        # stored and receipted as before, and is reported as not published.
+        sock = self.s / "receiver.sock"
+        q2 = self.approved("Rule two\n", 1, "agent-rules")
+        self.assertEqual(post(sock, "/v1/receive", {"request": q2})[0], 200)
+        self.assertEqual(file.read_bytes(), b"Rule two\n")
+        upper = self.approved("x", document="Notes")
+        self.assertEqual(post(sock, "/v1/receive", {"request": upper})[0], 200)
+        self.assertEqual(os.listdir(folder), ["agent-rules"])
+        self.assertEqual(
+            post(sock, "/v1/status", {})[1]["published"],
+            {"folder": str(folder), "not_published": ["Notes"]},
+        )
+        # A folder that is no longer safe: changes are still receipted, and
+        # the status says that nothing is confirmed as published.
+        os.chmod(folder, 0o777)
+        q3 = self.approved("Rule three\n", 2, "agent-rules")
+        self.assertEqual(post(sock, "/v1/receive", {"request": q3})[0], 200)
+        self.assertEqual(file.read_bytes(), b"Rule two\n")
+        self.assertEqual(
+            post(sock, "/v1/status", {})[1]["published"],
+            {"folder": str(folder), "not_published": None},
+        )
+        os.chmod(folder, 0o755)
+        self.assertEqual(
+            post(sock, "/v1/status", {})[1]["published"]["not_published"], ["Notes"]
+        )
+        self.assertEqual(file.read_bytes(), b"Rule three\n")
+        # One document that cannot be written is reported. It stops neither
+        # the other files nor a restart.
+        (folder / "blocked").mkdir()
+        q4 = self.approved("b", document="blocked")
+        self.assertEqual(post(sock, "/v1/receive", {"request": q4})[0], 200)
+        q5 = self.approved("Rule four\n", 3, "agent-rules")
+        self.assertEqual(post(sock, "/v1/receive", {"request": q5})[0], 200)
+        self.assertEqual(file.read_bytes(), b"Rule four\n")
+        missing = ["Notes", "blocked"]
+        self.assertEqual(
+            post(sock, "/v1/status", {})[1]["published"]["not_published"], missing
+        )
+        s.close()
+        file.unlink()
+        p = start()
+        s.processes = [p]
+        self.assertIn(b"listening", p.stdout.readline())
+        self.assertEqual(file.read_bytes(), b"Rule four\n")
+        self.assertEqual(
+            post(sock, "/v1/status", {})[1]["published"]["not_published"], missing
+        )
 
     def test_socket_path_must_be_a_socket_or_absent(self):
         taken = self.s / "receiver.sock"

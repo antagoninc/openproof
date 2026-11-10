@@ -22,6 +22,8 @@ mod pages;
 pub use pages::*;
 mod passkey;
 pub use passkey::*;
+#[cfg(unix)]
+pub mod publish;
 mod roles;
 pub use roles::*;
 pub mod tlog;

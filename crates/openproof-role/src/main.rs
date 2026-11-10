@@ -13,7 +13,7 @@
 mod service {
     use openproof_core::{verify_signature, Signed};
     use openproof_receiver::http::{fields, integer, read_request, respond, strict_json, text};
-    use openproof_receiver::{files, keys, tlog, *};
+    use openproof_receiver::{files, keys, publish, tlog, *};
     use serde_json::{json, Value};
     use std::os::unix::fs::{FileTypeExt, PermissionsExt};
     use std::os::unix::net::{UnixListener, UnixStream};
@@ -24,7 +24,7 @@ mod service {
 
     const USAGE: &str = "usage: openproof-role serve --role receiver|witness --state DIR \
         --key FILE --trust FILE --signed-trust FILE --socket PATH --client-uid UID... \
-        [--accept-trust-updates]";
+        [--accept-trust-updates] [--publish DIR]";
 
     struct Role {
         receiver: bool,
@@ -33,6 +33,8 @@ mod service {
         trust: PathBuf,
         signed_trust: PathBuf,
         accept_trust_updates: bool,
+        /// Protected files (docs/PROTECTED-FILES.md): the receiver's folder for them.
+        publish: Option<PathBuf>,
     }
 
     /// `Err((status, body))` is sent to the client as is.
@@ -113,7 +115,7 @@ mod service {
             match rest[i].as_str() {
                 "--accept-trust-updates" => accept = true,
                 name @ ("--role" | "--state" | "--key" | "--trust" | "--signed-trust"
-                | "--socket" | "--client-uid") => {
+                | "--socket" | "--client-uid" | "--publish") => {
                     i += 1;
                     flags
                         .entry(name)
@@ -146,6 +148,11 @@ mod service {
             return Err("give one to eight --client-uid accounts".into());
         }
         let state = PathBuf::from(one("--state")?);
+        let publish = match flags.get("--publish").map(Vec::as_slice) {
+            None => None,
+            Some([dir]) if role == "receiver" => Some(PathBuf::from(dir)),
+            Some(_) => return Err(format!("give --publish once, to the receiver\n{USAGE}").into()),
+        };
         let s = Role {
             receiver: role == "receiver",
             key: keys::key(one("--key")?)?,
@@ -153,6 +160,7 @@ mod service {
             signed_trust: one("--signed-trust")?.into(),
             accept_trust_updates: accept,
             state,
+            publish,
         };
         // The plain trust this role uses must be exactly the root-authenticated one.
         let root = role_root(&s.state)?.ok_or("Provision a pinned role root before serving")?;
@@ -160,6 +168,11 @@ mod service {
         verify_signature(&signed, &root)?;
         if strict_json(&keys::read(&s.trust)?)? != serde_json::to_value(&signed.payload)? {
             return Err("Plain trust differs from authenticated trust".into());
+        }
+        // The protected files are written before a request is served. A folder
+        // that fails its check stops the start; a single failed file does not.
+        if let Some(dir) = &s.publish {
+            publish::all(&s.state, dir)?;
         }
         let socket = PathBuf::from(one("--socket")?);
         let listener = listen(&socket)?;
@@ -255,8 +268,14 @@ mod service {
                     // check that an owner passkey is in force (docs/LOCAL-ROLES.md).
                     shape(&[])?;
                     let t = self.trust()?;
+                    // The protected files are written again here. A document whose
+                    // file does not have its content is named; `null` is a refused folder.
+                    let published = self.publish.as_ref().map(
+                        |dir| json!({"folder": dir, "not_published": publish::all(st, dir).ok()}),
+                    );
                     done(role_root(st).map(|root| {
-                        json!({"root": root, "epoch": t.epoch, "owner_passkey": t.owner_passkey})
+                        json!({"root": root, "epoch": t.epoch, "owner_passkey": t.owner_passkey,
+                               "published": published})
                     }))
                 }
                 ("/v1/install-trust", _) => {
@@ -304,7 +323,15 @@ mod service {
                 ("/v1/receive", true) => {
                     let m = shape(&["request"])?;
                     let t = self.trust()?;
-                    done(parse(&m["request"]).and_then(|q| apply(st, &q, &t, &self.key, time)))
+                    let r =
+                        done(parse(&m["request"]).and_then(|q| apply(st, &q, &t, &self.key, time)));
+                    // A change can be committed even when the reply is an error.
+                    // A file that could not be written keeps its earlier version;
+                    // `/v1/status` reports it and it is written again later.
+                    if let Some(dir) = &self.publish {
+                        let _ = publish::all(st, dir);
+                    }
+                    r
                 }
                 ("/v1/recover", true) => {
                     let m = shape(&["request"])?;

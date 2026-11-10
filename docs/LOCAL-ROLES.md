@@ -63,14 +63,19 @@ replace a pinned owner passkey, and the service refuses a change of role keys.
 
    If any step fails, the install undoes its changes and the owner home stays
    as it was.
-5. Start the owner app as usual. To move an existing install to a new binary, run `uninstall`, then `install` again.
+
+   With `--publish` at the end of the command, the receiver also writes each
+   approved document as a file that only its account can change
+   ([PROTECTED-FILES.md](PROTECTED-FILES.md)).
+5. Start the owner app as usual. To move an existing install to a new binary, or to add or remove `--publish`, run `uninstall`, then `install` again. `status` refuses an install record of an earlier version of the script and says so; `uninstall` accepts it.
 
 `uninstall` also removes an install made before 10 Nov 2026, which used
 loopback TLS. `install` then sets up the Unix sockets.
 
 If `install` stops with an error, it undoes its changes. If `uninstall` stops
 with an error before it has returned the role folders, the keys and the history
-are still in the role location, and the services are stopped. In both cases,
+are still in the role location, and the services are stopped. The folder of
+protected files, if there was one, is already removed. In both cases,
 correct the cause and run the same command again. The home and the role
 location must be on the same volume.
 
@@ -99,6 +104,9 @@ new change without an assertion from that passkey. The service reads this from
 the trust it enforces, so it reports what the receiver requires, whatever the
 owner app shows. G1 holds when both values are true ([TCB.md](TCB.md)).
 
+With `--publish`, the answer also has a `"protected_files"` part
+([PROTECTED-FILES.md](PROTECTED-FILES.md)).
+
 ## Uninstall
 
 ```
@@ -107,15 +115,17 @@ sudo /usr/bin/python3 -I scripts/local_roles.py uninstall --home outputs/passkey
 
 This stops the daemons, returns the keys and the full history to the owner
 home, compares the history, keeps the role folders in a root-only backup, and
-removes the accounts and the role code.
+removes the accounts and the role code. It also removes the folder of
+protected files; the documents stay in the history.
 
 ## Tests
 
 `scripts/tests/test_local_roles.py` runs the full install, workflow, trust
 renewal, separation probe, a refused connection from a third account, `status`
-and uninstall with real accounts. It runs only as root on Linux with
+and uninstall with real accounts, and the same for protected files with a
+failed install. It runs only as root on Linux with
 `OPENPROOF_ROLE_ACCOUNT_TEST=1`. `scripts/tests/test_role_service.py` checks the
 role service itself on every run: the peer check, each role's operations,
-tampering, replay and opt-in trust updates. The macOS account and launchd steps
+tampering, replay, opt-in trust updates and protected files. The macOS account and launchd steps
 were checked on a Mac on 8 Nov 2026, with the earlier TLS transport; confirm
 them with `status` after every install.
