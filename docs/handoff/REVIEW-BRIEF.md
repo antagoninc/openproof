@@ -1,10 +1,10 @@
 # External security review brief
 
-Status: ready for private reviewer selection. No external review has been commissioned or completed for v0.9. An AI review must be labeled as such and cannot be reported as a human audit or certification.
+Status: ready for reviewer selection. The source is public under Apache-2.0. No external human review has been commissioned or completed. An AI review must be labeled as such and cannot be reported as a human audit or certification.
 
 ## Engagement target
 
-Review the exact source archive and its SHA-256 manifest. Report its digest with every finding. Original Rust execution-assurance prototype, version 0.9.0, with new signed document approvals, transactional receiver receipts and separate witness checkpoints. The proposed independent-operator pilot is described in OPERATORS.md. Role services run under separate local accounts on Unix sockets; remote role services are not in this version, and independent deployment has not occurred.
+Review one exact commit of the public repository, or the source archive and its SHA-256 manifest. Report the commit or the digest with every finding. Original Rust execution-assurance prototype, version 0.9.0, with new signed document approvals, transactional receiver receipts and separate witness checkpoints. The proposed independent-operator pilot is described in OPERATORS.md. Role services run under separate local accounts on Unix sockets; remote role services are not in this version, and independent deployment has not occurred.
 
 Primary scope: the trusted code listed in [TCB.md](../TCB.md) and counted by `scripts/tcb_count.py`: `crates/openproof-core`, `crates/openproof-receiver`, `crates/openproof-role`, `scripts/local_roles.py`, the review page (`app/review.*`, `app/approval.js`, `app/common.js`, `app/base.css`) and the Go verifier. Then the owner side that the receiver and the review page are said to check: `crates/openproof-witness/src/{gate,broker,owner_app,mcp,transport}.rs`. Also trust lifecycle, parsing, private key handling, SQLite state, crash behavior and verifier assumptions. Review other workspace crates where they cross these boundaries. Review existing tests skeptically rather than treating passing tests as security proof.
 
@@ -30,13 +30,13 @@ Fixtures are public synthetic evidence. They contain time-bounded trust, so curr
 
 For each finding provide: affected source digest and file/line, trust boundary, realistic attacker prerequisite, reproducible test or minimal proof, observed versus expected behavior, impact and limitations, suggested correction, and regression test. Distinguish confirmed vulnerability, unconfirmed candidate, design limitation and informational observation. Do not imply absence of findings proves safety.
 
-Deliver a coverage map, exclusions, test logs, prioritized findings and an independent retest of fixes. Preserve the original reviewed snapshot; fixes create a new digest. A different model should review without inheriting the implementer's conclusions, then independently run checks. Disclose provider/model/version, date, tools, human involvement and limits. AI-only review does not satisfy the external human review deployment gate.
+Deliver a coverage map, exclusions, test logs, prioritized findings and an independent retest of fixes. Preserve the original reviewed snapshot; fixes create a new digest. A reviewer must not inherit the implementer's conclusions and must run the checks independently. If an AI model does part of a review, disclose provider/model/version, date, tools, human involvement and limits. AI-only review does not satisfy the external human review deployment gate.
 
 ## Handling and authorization
 
-Local preparation is authorized. Recipient, private transfer channel, provider data-retention terms, budget and permission to send must be selected before sharing. No public repository, public issue, unsolicited reviewer message or paid engagement is authorized by this package. No proprietary Antagon code, models, data or credentials belong in scope. Do not send output directories, development private keys, environment files or databases.
+The owner selects the reviewer, the scope, the budget and the engagement terms. This brief does not commission a review or authorize a paid engagement. No proprietary Antagon code, models, data or credentials belong in scope. Do not send output directories, development private keys, environment files or databases.
 
-Reviewer access is limited to the approved snapshot. Do not probe external infrastructure, use production credentials or test real users. Coordinate privately if a finding affects upstream software.
+Review the agreed commit only. Do not probe external infrastructure, use production credentials or test real users. Coordinate privately if a finding affects upstream software.
 
 ## v0.8 review additions
 
