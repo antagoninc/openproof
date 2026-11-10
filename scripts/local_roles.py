@@ -709,7 +709,7 @@ def install(home, base, users, manager):
                 "actions in the owner app first."
             )
         say("1/7 Check that the owner cannot change the role location")
-        say("2/7 Install a root-owned copy of the openproof-witness binary")
+        say("2/7 Install root-owned copies of the role binary and this script")
         code = install_code(base)
         refuse_writable(
             [code], owner, "The role services would run code the owner can change."
