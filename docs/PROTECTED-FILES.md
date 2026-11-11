@@ -109,6 +109,23 @@ file. Protected files are for programs that read a fixed, administrator-set
 path. Whether a given program follows a link at such a path is that program's
 behaviour; test it.
 
+## Settings files
+
+A protected file can be a settings file that another program enforces, for
+example a list of denied actions. The program then applies limits that the
+agent cannot change, and each change of the limits needs the owner's approval.
+
+- Give the document a name that ends in `settings` or `json`, for example
+  `agent-settings`. The owner app then accepts only a JSON object for it.
+  The receiver does not check this; it is a help against a typing error.
+- A document name has no dot. If the program needs a file name such as
+  `limits.json`, give that name to the root-owned link.
+- Some programs do not start when their settings file is not valid. If that
+  occurs, approve a corrected version in the owner app, which does not
+  depend on that program. An administrator can also remove the link.
+- What the program does with the settings is that program's behaviour. Read
+  its documentation for what its limits stop and what they do not stop.
+
 ## Limits
 
 - Every local account can read the files. Do not put secrets in a document

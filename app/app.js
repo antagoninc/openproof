@@ -283,6 +283,30 @@ async function refresh() {
     : "The trust is valid until " + until + ". It lasts one day.";
   $("renew").hidden = !s.trust.expired && left > 2 * 3600;
 
+  // Names the owner has used, for the proposal form.
+  $("known-documents").replaceChildren(
+    ...s.documents.map((name) => {
+      const option = document.createElement("option");
+      option.value = name;
+      return option;
+    }),
+  );
+  // Protected files (docs/PROTECTED-FILES.md), as the receiver service
+  // reports them. The check is local_roles.py status.
+  const files = s.published;
+  $("files-summary").hidden = !files;
+  $("files-summary").textContent = !files
+    ? ""
+    : !Array.isArray(files.not_published)
+      ? "Protected files: the receiver did not accept the folder. Run local_roles.py status."
+      : files.not_published.length
+        ? "Protected files are in " +
+          files.folder +
+          ". Not written as current files: " +
+          files.not_published.join(", ") +
+          "."
+        : "Protected files are in " + files.folder + ". All files are current.";
+
   $("mode").textContent = s.paused
     ? s.rotation_message || "Admission paused for key handover."
     : s.paging
@@ -345,19 +369,44 @@ async function quietHealth() {
 // ---------------------------------------------------------------- compose
 
 let versionTimer = 0;
+// The text that this page put in the text box, if the owner has not changed it.
+let loadedText = "";
+function fileHint(name) {
+  const files = status && status.published;
+  if (!files) return "";
+  let hint = /[A-Z]/.test(name)
+    ? "A name with a capital letter is not written as a protected file."
+    : "Protected file: " + files.folder + "/" + name;
+  if (/(settings|json)$/.test(name))
+    hint += " The text must be a JSON object, because of the name.";
+  return hint;
+}
 async function fillCurrentVersion() {
   const form = $("proposal-form");
   const name = form.elements.document.value.trim();
   const hint = $("version-hint");
+  $("file-hint").hidden = true;
   if (!/^[A-Za-z0-9_-]{1,80}$/.test(name)) {
-    hint.textContent =
-      "Use 1 to 80 letters, digits, hyphens or underscores.";
+    hint.textContent = name
+      ? "Use 1 to 80 letters, digits, hyphens or underscores."
+      : "Type a new name to make a document, or the name of a document to change it.";
     return;
   }
+  $("file-hint").textContent = fileHint(name);
+  $("file-hint").hidden = !$("file-hint").textContent;
   try {
     const r = await api("current-version", { document: name });
+    if (form.elements.document.value.trim() !== name) return;
     if (Number.isSafeInteger(r.version)) {
       form.elements.expected_version.value = String(r.version);
+      const box = form.elements.content;
+      const untouched = box.value === "" || box.value === loadedText;
+      if (untouched) {
+        // Edit the current text instead of typing it again.
+        loadedText = typeof r.content === "string" ? r.content : "";
+        box.value = loadedText;
+        updateDigest();
+      }
       hint.textContent =
         r.version === 0
           ? "New document. It will be created at version 1."
@@ -365,7 +414,9 @@ async function fillCurrentVersion() {
             r.version +
             ". This change makes version " +
             (r.version + 1) +
-            ".";
+            (untouched && loadedText
+              ? ". The current text is in the box below: change it there."
+              : ".");
     } else {
       hint.textContent =
         "The receiver did not answer. Enter the current version yourself.";
@@ -390,7 +441,8 @@ function openCompose() {
   $("compose").showModal();
   fillCurrentVersion();
   updateDigest();
-  $("proposal-form").elements.content.focus();
+  const form = $("proposal-form").elements;
+  (form.document.value ? form.content : form.document).focus();
 }
 $("new-change").onclick = openCompose;
 const docField = $("proposal-form").elements.document;
@@ -415,6 +467,8 @@ $("proposal-form").onsubmit = (e) => {
     });
     $("compose").close();
     e.target.elements.content.value = "";
+    e.target.elements.document.value = "";
+    loadedText = "";
     await refresh();
     say("Proposal created. Review it before you approve anything.");
     const id = r && r.proposal_id;

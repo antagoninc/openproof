@@ -197,6 +197,60 @@ class OwnerAppTests(unittest.TestCase):
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         self.assertEqual(o.request("GET", "/api/status")[0], 401)
 
+    def test_form_helpers_and_renewal_at_start(self):
+        from witness_workflow import install_trust
+
+        # A home without role services reports no protected files.
+        status = self.o.status()
+        self.assertEqual((status["documents"], status["published"]), ([], None))
+        absent = {"document": "report", "version": 0, "content": None}
+        self.assertEqual(self.o.call("current-version", {"document": "report"}), absent)
+        self.o.commit(self.approved())
+        # The form gets the current text, to edit it instead of typing it again.
+        self.assertEqual(
+            self.o.call("current-version", {"document": "report"}),
+            {
+                "document": "report",
+                "version": 1,
+                "content": "<script>untrusted text</script>",
+            },
+        )
+        # A document named as settings or JSON must be a JSON object.
+        for name, text in [
+            ("claude-settings", "not json"),
+            ("claude-settings", "[1]"),
+            ("rules-json", '{"a": 1'),
+        ]:
+            code, data = self.o.post(
+                "propose", {"document": name, "expected_version": 0, "content": text}
+            )
+            self.assertEqual(code, 400)
+            self.assertIn(name + " must be a JSON object", data["error"])
+        good = '{"permissions": {"deny": ["Bash(sudo *)"]}}'
+        self.assertTrue(self.o.propose("claude-settings", 0, good)["proposal_id"])
+        self.assertTrue(self.o.propose("notes", 0, "not json")["proposal_id"])
+        self.assertEqual(
+            self.o.status()["documents"], ["claude-settings", "notes", "report"]
+        )
+        # A trust that ends within two hours is renewed when the app starts.
+        t = ref.read(self.h / "trust.json")
+        t["epoch"] += 1
+        t["expires_at"] = int(time.time()) + 3600
+        short = self.h.parent / "short-trust.json"
+        short.write_text(json.dumps(t))
+        install_trust(self.h, short)
+        self.assertEqual(self.o.status()["trust"]["expires_at"], t["expires_at"])
+        self.o.close()
+        self.o = OwnerClient(self.h)
+        renewed = self.o.status()["trust"]
+        self.assertGreater(renewed["expires_at"], time.time() + 23 * 3600)
+        self.assertEqual(ref.read(self.h / "trust.json")["epoch"], t["epoch"] + 1)
+        # A trust with more time left is not changed by a start.
+        self.o.close()
+        self.o = OwnerClient(self.h)
+        self.assertEqual(self.o.status()["trust"], renewed)
+        self.assertEqual(ref.read(self.h / "trust.json")["epoch"], t["epoch"] + 1)
+
     def test_owner_form_refuses_a_stale_version(self):
         self.assertEqual(self.o.current_version("report"), 0)
         identity = self.approved()

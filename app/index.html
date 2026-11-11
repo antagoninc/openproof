@@ -107,6 +107,7 @@
           <dl id="health-list" class="kv" hidden></dl>
           <div id="recovery-items" class="mini-items"></div>
           <p id="services-summary" class="fine"></p>
+          <p id="files-summary" class="fine" hidden></p>
           <p id="trust-summary" class="fine"></p>
           <button id="renew" class="primary block" type="button" hidden>
             Renew trust
@@ -172,18 +173,21 @@
             ><span>Document name</span
             ><input
               name="document"
-              value="project-status"
+              list="known-documents"
+              placeholder="A new name, or a document to change"
               pattern="[A-Za-z0-9_\-]{1,80}"
               autocomplete="off"
               spellcheck="false"
               required
-          /></label>
+            /><datalist id="known-documents"></datalist
+          ></label>
           <label class="field narrow"
             ><span>Current version</span
             ><input name="expected_version" type="number" min="0" value="0" required
           /></label>
         </div>
         <p id="version-hint" class="fine"></p>
+        <p id="file-hint" class="fine" hidden></p>
         <label class="field"
           ><span>Exact new content</span
           ><textarea

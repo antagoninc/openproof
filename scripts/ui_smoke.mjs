@@ -98,6 +98,38 @@ try {
   const recovery = await api("recovery");
   if (recovery.heads.receiver !== 1 || recovery.heads.witness !== 1)
     throw Error("Unexpected history: " + JSON.stringify(recovery.heads));
+  // 4. The proposal form starts with no document name. For a document that
+  // exists, it loads the current text and version; for a new name it is empty.
+  await evaluate("document.getElementById('new-change').click()");
+  const form = await evaluate(`({
+    name: document.querySelector('[name=document]').value,
+    known: [...document.querySelectorAll('#known-documents option')].map((o) => o.value),
+  })`);
+  if (form.name !== "" || !form.known.includes("browser-fixture"))
+    throw Error("Unexpected proposal form: " + JSON.stringify(form));
+  const choose = (name) =>
+    evaluate(`(() => {
+      const field = document.querySelector('[name=document]');
+      field.value = ${JSON.stringify(name)};
+      field.dispatchEvent(new Event('change'));
+    })()`);
+  const formState = () =>
+    evaluate(`({
+      text: document.querySelector('[name=content]').value,
+      version: document.querySelector('[name=expected_version]').value,
+      hint: document.getElementById('version-hint').textContent,
+    })`);
+  await choose("browser-fixture");
+  await until(async () => {
+    const f = await formState();
+    return f.text === content && f.version === "1" && f.hint.includes("current text");
+  }, "current text in the form");
+  await choose("another-document");
+  await until(async () => {
+    const f = await formState();
+    return f.text === "" && f.version === "0" && f.hint.includes("New document");
+  }, "empty form for a new document");
+  await evaluate("document.getElementById('compose').close()");
   await b.screenshot(path.join(out, "app.png"));
   fs.writeFileSync(
     path.join(out, "result.json"),
@@ -107,6 +139,7 @@ try {
         review_on_separate_page: true,
         review_page_scripts: review.scripts,
         untrusted_content_rendered_as_text: true,
+        form_loads_current_text: true,
         version_after_retry: 1,
         external_model_calls: 0,
       },
@@ -114,7 +147,7 @@ try {
       2,
     ),
   );
-  console.log("Browser workflow passed: separate review page, approval, execution, retry, text isolation.");
+  console.log("Browser workflow passed: separate review page, approval, execution, retry, text isolation, proposal form.");
 } finally {
   if (b) b.close();
   app.kill();

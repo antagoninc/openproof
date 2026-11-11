@@ -245,6 +245,7 @@ impl Owner {
             }
         }
         saved.sort();
+        let mut known = vec![];
         for (_, dir) in saved {
             let (Ok(a), Ok(cp)) = (
                 read_json(dir.join("assessment.json")),
@@ -252,6 +253,7 @@ impl Owner {
             ) else {
                 continue;
             };
+            known.extend(a["document"].as_str().map(String::from));
             let age = now() as i64 - cp["payload"]["observed_at"].as_i64().unwrap_or(0);
             if a["verification_status"] != "local_consistency_verified" {
                 continue;
@@ -269,8 +271,18 @@ impl Owner {
                 item["assessment_recorded"] = json!(true);
             }
         }
+        // Names for the proposal form: documents this home has acted on.
+        let mut documents: Vec<String> = items
+            .iter()
+            .filter_map(|i| i["document"].as_str().map(String::from))
+            .chain(known)
+            .collect();
+        documents.sort();
+        documents.dedup();
         let (configured, _) = self.passkey()?;
         Ok(json!({
+            "documents": documents,
+            "published": broker::published(h),
             "rotation_resumable": false,
             "rotation_message": "",
             "items": items,
@@ -364,7 +376,16 @@ impl Owner {
         let m = fields(v, &["document", "expected_version", "content"], &[]).map_err(invalid)?;
         let document = text(m, "document").map_err(invalid)?;
         let expected = integer(m, "expected_version").map_err(invalid)?;
-        text(m, "content").map_err(invalid)?;
+        let content = text(m, "content").map_err(invalid)?;
+        // A settings file that is not a JSON object can stop the program that
+        // reads it. A help for the owner, not a check that anything relies on.
+        if (document.ends_with("settings") || document.ends_with("json"))
+            && !serde_json::from_str::<Value>(content).is_ok_and(|v| v.is_object())
+        {
+            return Err((400, format!(
+                "{document} must be a JSON object, because its name ends in \"settings\" or \"json\". Correct the text, or use another document name."
+            )));
+        }
         if let Some(current) = broker::current_version(&self.home, document) {
             if current != expected {
                 return Err((409, format!(
@@ -737,9 +758,14 @@ impl Owner {
             "/api/current-version" => fields(&v, &["document"], &[])
                 .and_then(|m| text(m, "document").map(String::from))
                 .map_err(invalid)
-                .map(
-                    |d| json!({"document": d, "version": broker::current_version(&self.home, &d)}),
-                ),
+                .map(|d| match broker::current_document(&self.home, &d) {
+                    // The current text lets the owner edit it instead of typing it again.
+                    Some(Some((version, content))) => {
+                        json!({"document": d, "version": version, "content": content})
+                    }
+                    Some(None) => json!({"document": d, "version": 0, "content": null}),
+                    None => json!({"document": d, "version": null, "content": null}),
+                }),
             "/api/review" => id().and_then(|i| self.review(&i).map_err(invalid)),
             "/api/repropose" => id().and_then(|i| self.repropose(&i).map_err(invalid)),
             "/api/approve" => fields(&v, &["id", "review_token"], &[])
@@ -945,6 +971,16 @@ pub fn main(rest: &[&str]) -> Result<()> {
             &json!({"document": "welcome-report", "expected_version": 0,
             "content": "Welcome to OpenProof. This public demonstration stores exactly this text in the local receiver database. Review, approve, and execute are separate decisions. No model was called."}),
         )?;
+    }
+    // The local trust lasts one day. Renew it at start when it has ended or
+    // ends within two hours, as the Renew button does. The root key that signs
+    // it is in this home, so this gives the owner's account nothing new.
+    if owner
+        .trust_expiry()
+        .is_some_and(|(at, _)| at < now() + 2 * 3600)
+        && broker::renew(&owner.home).is_ok()
+    {
+        println!("The local trust was renewed for one day.");
     }
     let url = format!("{}/#{}", owner.workspace, owner.token);
     if let Some(path) = session {

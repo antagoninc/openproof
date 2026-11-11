@@ -218,6 +218,17 @@ class RoleServiceTests(unittest.TestCase):
         self.assertIsNone(s.request("witness", "/v1/status", {})[1]["published"])
         empty = {"folder": str(folder), "not_published": []}
         self.assertEqual(s.request("receiver", "/v1/status", {})[1]["published"], empty)
+        # The owner app shows what the receiver service reports.
+        (h / "service-client.json").write_text(json.dumps(s.config()))
+        sys.path.insert(0, str(Path(__file__).parent))
+        from owner_client import OwnerClient
+
+        o = OwnerClient(h)
+        try:
+            self.assertEqual(o.status()["published"], empty)
+        finally:
+            o.close()
+            (h / "service-client.json").unlink()
         q = self.approved("Rule one\n", document="agent-rules")
         refused = dict(q, content="Rule 1\n")
         self.assertEqual(
