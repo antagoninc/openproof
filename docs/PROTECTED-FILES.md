@@ -150,6 +150,7 @@ for unsafe folders, and that a failed install leaves nothing.
 On a Mac (launchd, 10 Nov 2026), these were checked by hand: `uninstall` of a
 version 2 install, `install --publish`, the `status` answer above, the files
 of the documents that existed before the install, a read by the owner's
-account, and a refused write by the owner's account. A change of a file
-through a new approval was not yet checked on a Mac. Confirm an install with
-`status`.
+account, a refused write by the owner's account, a new version of a file
+after a passkey approval, the file of a new document, and a root-owned link
+from the fixed rules path of another program to a protected file, which that
+program then read and could not change. Confirm an install with `status`.
