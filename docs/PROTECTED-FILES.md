@@ -170,4 +170,8 @@ of the documents that existed before the install, a read by the owner's
 account, a refused write by the owner's account, a new version of a file
 after a passkey approval, the file of a new document, and a root-owned link
 from the fixed rules path of another program to a protected file, which that
-program then read and could not change. Confirm an install with `status`.
+program then read and could not change. The same was checked for a settings
+file (11 Nov 2026): a root-owned link in the settings folder of another
+program, a denied command that the program then refused, and a new version of
+the settings after a passkey approval. That program read the changed settings
+in a session that started after the change. Confirm an install with `status`.
