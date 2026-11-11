@@ -152,6 +152,10 @@ failed install. It runs only as root on Linux with
 role service itself on every run: the peer check, the message form, each
 role's operations, tampering, replay, opt-in trust updates and protected
 files. The root test also puts the install into states that a defective
-installer could leave, and checks that the status check reports each one. The macOS account and launchd steps
-were checked on a Mac on 8 Nov 2026, with the earlier TLS transport; confirm
-them with `status` after every install.
+installer could leave, and checks that the status check reports each one.
+
+On a Mac (launchd, 10 Nov 2026), these were checked by hand: `uninstall` of a
+version 3 install, `install --publish` of version 4, and the status check as
+the owner and as the administrator with `sudo`, with every value true. The
+states of a defective install were tested on Linux only. Confirm an install
+with the status check.
