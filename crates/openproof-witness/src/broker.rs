@@ -129,7 +129,7 @@ pub fn current_version(home: &Path, document: &str) -> Option<u64> {
 /// What the receiver service reports about protected files
 /// (docs/PROTECTED-FILES.md): `{folder, not_published}`. `None` without role
 /// services, without the option, or when the service does not answer.
-/// Display only: the check is `local_roles.py status`.
+/// Display only: the check is the status check, `roles_status.py`.
 pub fn published(home: &Path) -> Option<Value> {
     if !home.join("service-client.json").exists() {
         return None;

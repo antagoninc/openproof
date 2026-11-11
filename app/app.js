@@ -292,13 +292,13 @@ async function refresh() {
     }),
   );
   // Protected files (docs/PROTECTED-FILES.md), as the receiver service
-  // reports them. The check is local_roles.py status.
+  // reports them. The check is the status check, roles_status.py.
   const files = s.published;
   $("files-summary").hidden = !files;
   $("files-summary").textContent = !files
     ? ""
     : !Array.isArray(files.not_published)
-      ? "Protected files: the receiver did not accept the folder. Run local_roles.py status."
+      ? "Protected files: the receiver did not accept the folder. Run the status check (roles_status.py)."
       : files.not_published.length
         ? "Protected files are in " +
           files.folder +
@@ -581,7 +581,7 @@ async function recoveryRefresh() {
   );
   $("services-summary").textContent =
     r.services === "separate_accounts"
-      ? "The receiver and the witness run under their own accounts. Check them with local_roles.py status."
+      ? "The receiver and the witness run under their own accounts. Check them with the status check (roles_status.py)."
       : "The receiver and the witness run in this account. See LOCAL-ROLES.md to separate them.";
 }
 $("renew").onclick = () =>

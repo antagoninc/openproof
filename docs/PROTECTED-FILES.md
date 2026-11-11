@@ -59,7 +59,7 @@ service starts with `--publish BASE/published`.
 ## Check
 
 ```
-/usr/bin/python3 -I BASE/libexec/local_roles.py status --home HOME
+/usr/bin/python3 -I BASE/libexec/roles_status.py --home HOME
 ```
 
 With protected files on, the answer has this part:
@@ -73,10 +73,10 @@ With protected files on, the answer has this part:
 }
 ```
 
-- `owner_cannot_change`: by owner, group and mode, the owner's account cannot
-  change the folder, a file in it, or a folder on the path to it; the folder
-  belongs to the receiver's account; and its mode lets no group or other
-  account write it. Access control lists are not read.
+- `owner_cannot_change`: the folder and each entry in it belong to the
+  receiver's account, their modes let no group or other account write them,
+  and the folders above belong to root in the same way. Access control lists
+  are not read.
 - `receiver_writes_here`: the receiver service reports this folder as its
   own.
 - `not_published`: the documents whose files do not have the current

@@ -21,7 +21,7 @@ an independent witness operator.
 
 Commands (the Python standard library only; use the system Python):
   sudo /usr/bin/python3 -I scripts/local_roles.py install --home HOME [--publish]
-  /usr/bin/python3 -I BASE/libexec/local_roles.py status --home HOME
+  /usr/bin/python3 -I BASE/libexec/roles_status.py --home HOME
   sudo /usr/bin/python3 -I scripts/local_roles.py uninstall --home HOME
 
 With `--publish`, the receiver also writes each approved document as a file
@@ -29,20 +29,27 @@ in BASE/published, which only its account can change
 (docs/PROTECTED-FILES.md).
 
 Run `install` only from a checkout you have just pulled and checked: it copies
-the role code and this script from the checkout into a root-owned location.
-Run `status` from that copy: the owner account cannot change it.
+the role binary and the status check (`roles_status.py`) from the checkout
+into a root-owned location. Run the status check from that copy: the owner
+account cannot change it. It is the check of what this script did
+(docs/TCB.md); `status` here runs the same check from the checkout.
 """
 
 import argparse, contextlib, errno, fcntl, json, os, platform, plistlib
 import pwd, shutil, signal, socket, sqlite3, stat, subprocess, sys, time
 from pathlib import Path
 
+# The status check is a separate file (docs/TCB.md). The system Python, run
+# isolated, does not look for modules next to this script by itself.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from roles_status import ROLES, VERSION, ask, definition, label, load_record
+from roles_status import record_path, socket_path, status
+
 ROOT = Path(__file__).resolve().parents[1]
-ROLES = ("receiver", "witness")
-VERSION = "openproof-local-roles/3"
-# Records this script can still uninstall: version 1 used loopback mTLS, and
-# version 2 had no protected files.
-UNINSTALLABLE = {"openproof-local-roles/1", "openproof-local-roles/2", VERSION}
+# Records this script can still uninstall: version 1 used loopback mTLS,
+# version 2 had no protected files, and version 3 had the status check in
+# this file.
+UNINSTALLABLE = {"openproof-local-roles/" + n for n in "123"} | {VERSION}
 # The only code the role services run: one root-owned copy of this binary.
 BINARY = "target/debug/openproof-role"
 MAC = platform.system() == "Darwin"
@@ -88,6 +95,9 @@ def account_exists(name):
         return False
 
 
+# TCB:begin
+# The status check cannot see if an account can log in. So the creation of the
+# service accounts, without a password and without a shell, stays trusted.
 def create_account(name, description):
     if account_exists(name):
         raise RuntimeError(f"Account {name} already exists. Run uninstall first.")
@@ -140,6 +150,9 @@ def create_account(name, description):
     raise RuntimeError(f"Account {name} was created but cannot be read back.")
 
 
+# TCB:end
+
+
 def delete_account(name):
     if not account_exists(name):
         return
@@ -151,6 +164,9 @@ def delete_account(name):
 
 
 # ---------------------------------------------------------------- checks
+
+
+# ---------------------------------------------------------------- files
 
 
 def owner_groups(uid):
@@ -172,14 +188,14 @@ def writable_by(path, uid, gids):
     )
 
 
-def refuse_writable(paths, uid, why):
+def refuse_writable(paths, uid, why, tree=True):
     gids = owner_groups(uid)
     seen = set()
     for top in paths:
         top = Path(os.path.realpath(top))
         chain = [top, *top.parents]
-        tree = list(top.rglob("*")) if top.is_dir() else []
-        for p in chain + tree:
+        inside = list(top.rglob("*")) if tree and top.is_dir() else []
+        for p in chain + inside:
             real = Path(os.path.realpath(p))
             for q in {p, real}:
                 if q in seen:
@@ -190,9 +206,6 @@ def refuse_writable(paths, uid, why):
                         f"{q} can be changed by the owner account. {why} "
                         "Choose a location owned by root and not writable by the owner."
                     )
-
-
-# ---------------------------------------------------------------- files
 
 
 # Root never follows a link in the owner's home: every file there is opened
@@ -290,6 +303,10 @@ def open_db(path):
         raise RuntimeError(f"{path}: {e}") from None
 
 
+# TCB:begin
+# The status check cannot see if a role state is a new file. So this stays
+# trusted: the state that a service uses is a copy that root made, never a
+# file that a process of the owner can still have open.
 def copy_state(source, target):
     """Copy a role state directory with a consistent SQLite snapshot."""
     target.mkdir(mode=0o700)
@@ -309,6 +326,9 @@ def copy_state(source, target):
             raise RuntimeError(f"Unexpected entry in role state: {item}")
 
 
+# TCB:end
+
+
 def chown_tree(path, uid, gid):
     for p in [path, *path.rglob("*")]:
         os.lchown(p, uid, gid)
@@ -316,6 +336,10 @@ def chown_tree(path, uid, gid):
             os.chmod(p, 0o700 if p.is_dir() else 0o600)
 
 
+# TCB:begin
+# The status check cannot see if the role code is a new file. So this stays
+# trusted: the binary and the status check in the role location are copies
+# that root made, never files that a process of the owner can have open.
 def install_code(base):
     code = base / "libexec"
     if code.exists():
@@ -327,90 +351,41 @@ def install_code(base):
         )
     code.mkdir(mode=0o755)
     shutil.copy2(src, code / "openproof-role")
-    # A root-owned copy of this script, so `status` can run from code the
+    # A root-owned copy of the status check, so that it runs from code the
     # owner account cannot change (docs/LOCAL-ROLES.md).
-    shutil.copy2(Path(__file__).resolve(), code / "local_roles.py")
+    shutil.copy2(Path(__file__).resolve().parent / "roles_status.py", code)
     for p, mode in [
         (code, 0o755),
         (code / "openproof-role", 0o755),
-        (code / "local_roles.py", 0o644),
+        (code / "roles_status.py", 0o644),
     ]:
         os.chown(p, 0, 0)
         os.chmod(p, mode)
     return code
 
 
+# TCB:end
+
+
 # ---------------------------------------------------------------- services
 
 
-def label(role):
-    return "com.antagon.openproof." + role
-
-
-def socket_path(base, role):
-    """Each role's socket is in a folder that only its account can change."""
-    return base / "sockets" / role / "service.sock"
-
-
-def service_command(code, role_dir, role, socket_file, owner, publish=None):
-    return [
-        str(code / "openproof-role"),
-        "serve",
-        "--role",
-        role,
-        "--state",
-        str(role_dir / "state"),
-        "--key",
-        str(role_dir / "key.secret"),
-        "--trust",
-        str(role_dir / "trust.json"),
-        "--signed-trust",
-        str(role_dir / "trust-signed.json"),
-        "--socket",
-        str(socket_file),
-        # The owner's account, and root for install, status checks and recovery.
-        "--client-uid",
-        str(owner),
-        "--client-uid",
-        "0",
-        "--accept-trust-updates",
-        *(["--publish", str(publish)] if publish else []),
-    ]
-
-
-def start_service(manager, base, role, account, command, role_dir):
+def start_service(manager, base, role, account, role_dir, path, content):
+    """Write the service definition that the status check expects
+    (`definition` in roles_status.py), and start the service from it."""
     if manager == "launchd":
-        plist = Path("/Library/LaunchDaemons") / (label(role) + ".plist")
-        data = dict(
-            Label=label(role),
-            ProgramArguments=command,
-            UserName=account.pw_name,
-            GroupName=account.pw_name,
-            WorkingDirectory=str(role_dir),
-            RunAtLoad=True,
-            KeepAlive=True,
-            Umask=0o077,
-            EnvironmentVariables={"PATH": "/usr/bin:/bin"},
-            StandardOutPath=str(role_dir / "service.log"),
-            StandardErrorPath=str(role_dir / "service.log"),
-        )
-        with open(plist, "wb") as f:
-            plistlib.dump(data, f)
-        os.chown(plist, 0, 0)
-        os.chmod(plist, 0o644)
-        run("launchctl", "bootstrap", "system", plist)
+        with open(path, "wb") as f:
+            plistlib.dump(content, f)
+        os.chown(path, 0, 0)
+        os.chmod(path, 0o644)
+        run("launchctl", "bootstrap", "system", path)
     elif manager == "systemd":
-        unit = Path("/etc/systemd/system") / ("openproof-" + role + ".service")
-        unit.write_text(
-            "[Unit]\nDescription=OpenProof " + role + "\n\n[Service]\n"
-            f"User={account.pw_name}\nGroup={account.pw_name}\n"
-            f"WorkingDirectory={role_dir}\nUMask=0077\nNoNewPrivileges=yes\n"
-            "ExecStart=" + " ".join(command) + "\nRestart=always\n\n"
-            "[Install]\nWantedBy=multi-user.target\n"
-        )
+        path.write_text(content)
+        os.chmod(path, 0o644)
         run("systemctl", "daemon-reload")
-        run("systemctl", "enable", "--now", unit.name)
+        run("systemctl", "enable", "--now", path.name)
     else:
+        command, _ = content
         log = open(role_dir / "service.log", "ab")
         process = subprocess.Popen(
             command,
@@ -425,7 +400,8 @@ def start_service(manager, base, role, account, command, role_dir):
             stderr=log,
             start_new_session=True,
         )
-        (base / (role + ".pid")).write_text(str(process.pid))
+        path.write_text(str(process.pid))
+        os.chmod(path, 0o644)
 
 
 def stop_service(manager, base, role):
@@ -466,10 +442,6 @@ def wait_for_socket(path, seconds=20):
 # ---------------------------------------------------------------- commands
 
 
-def record_path(base):
-    return base / "install.json"
-
-
 # This script uses the Python standard library only, and never runs code
 # from the checkout or the owner home: it runs as root, and `status` is the
 # check that G1's condition holds (docs/TCB.md).
@@ -479,12 +451,15 @@ def record_path(base):
 def home_lock(home, owner):
     """The owner home's broker lock, as the owner app and broker take it. A
     lock file this creates belongs to the owner, whatever happens next."""
-    fd = os.open(
-        Path(home) / ".broker.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
-    )
+    path, flags = Path(home) / ".broker.lock", os.O_RDWR | os.O_NOFOLLOW
     try:
-        if os.fstat(fd).st_uid == 0:
-            os.fchown(fd, owner.pw_uid, owner.pw_gid)
+        # Only a file made here is given to the owner. A file that is there
+        # already can be a hard link to a file of root.
+        fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+        os.fchown(fd, owner.pw_uid, owner.pw_gid)
+    except FileExistsError:
+        fd = os.open(path, flags)
+    try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:
@@ -507,28 +482,6 @@ def state_head(state):
     finally:
         db.close()
     return dict(count=count, root=row[0] if row else None)
-
-
-def ask(sock, op):
-    """One request to a role service on its Unix socket."""
-    raw = b"{}"
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        s.settimeout(20)
-        s.connect(str(sock))
-        s.sendall(
-            b"POST /v1/%s HTTP/1.1\r\nContent-Type: application/json\r\n"
-            b"Content-Length: %d\r\nConnection: close\r\n\r\n" % (op.encode(), len(raw))
-            + raw
-        )
-        response = b""
-        while chunk := s.recv(65536):
-            response += chunk
-            if len(response) > 1_200_000:
-                raise RuntimeError("role service answer too large")
-    head, _, body = response.partition(b"\r\n\r\n")
-    if not head.startswith(b"HTTP/1.1 200 "):
-        raise RuntimeError(f"role service {sock}: {head[:40]!r} {body[:200]!r}")
-    return json.loads(body)
 
 
 def heads(states):
@@ -588,21 +541,23 @@ def _move_roles(
         os.chown(publish, accounts["receiver"].pw_uid, accounts["receiver"].pw_gid)
         os.chmod(publish, 0o755)
     say("5/7 Start the role services")
+    wanted = dict(
+        base=str(base),
+        manager=manager,
+        users=users,
+        sockets={role: str(socket_path(base, role)) for role in ROLES},
+        publish=str(publish) if publish else None,
+    )
     for role in ROLES:
-        command = service_command(
-            code,
-            roles_dir[role],
-            role,
-            socket_path(base, role),
-            owner,
-            publish if role == "receiver" else None,
+        path, content = definition(wanted, role, owner)
+        start_service(
+            manager, base, role, accounts[role], roles_dir[role], path, content
         )
-        start_service(manager, base, role, accounts[role], command, roles_dir[role])
     for role in ROLES:
         wait_for_socket(socket_path(base, role))
     say("6/7 Connect the owner home and compare the history")
     config = dict(
-        version="openproof-service-client/2",
+        version="openproof-service-client/3",
         **{role: dict(socket=str(socket_path(base, role))) for role in ROLES},
     )
     home_fd = open_dir(home)
@@ -682,6 +637,7 @@ def install(home, base, users, manager, publish=False):
     if os.geteuid() != 0:
         raise RuntimeError("Run install with sudo.")
     home = home.resolve()
+    base = base.resolve()
     owner = home.stat().st_uid
     if owner == 0:
         raise RuntimeError(
@@ -727,7 +683,7 @@ def install(home, base, users, manager, publish=False):
                 "actions in the owner app first."
             )
         say("1/7 Check that the owner cannot change the role location")
-        say("2/7 Install root-owned copies of the role binary and this script")
+        say("2/7 Install root-owned copies of the role binary and the status check")
         code = install_code(base)
         refuse_writable(
             [code], owner, "The role services would run code the owner can change."
@@ -800,93 +756,6 @@ def install(home, base, users, manager, publish=False):
     say("Done. The receiver and the witness now run under their own accounts.")
     say(f"Backup of the owner's old role folders (root only): {backup}")
     return record
-
-
-def load_record(base, home, versions=(VERSION,)):
-    path = record_path(base)
-    if not path.exists():
-        raise RuntimeError("Local roles are not installed.")
-    record = json.loads(path.read_text())
-    if record.get("version") not in versions:
-        raise RuntimeError(
-            "Local roles were installed by an earlier version. Run uninstall, then install."
-        )
-    if Path(record["home"]) != home.resolve():
-        raise RuntimeError(
-            f"Local roles are installed for another home: {record.get('home')}"
-        )
-    return record
-
-
-def status(home, base):
-    """Whether the roles are separated and the receiver requires the passkey.
-    Run it as the owner or as the administrator; it reads only the install
-    record, the role folders' metadata and the services' own answers."""
-    record = load_record(base, home)
-    owner = pwd.getpwnam(record["owner"])
-    report = dict(installed_for=record["home"], roles={})
-    for role in ROLES:
-        d = Path(record["base"]) / role
-        entry = dict(account=record["users"][role], socket=record["sockets"][role])
-        try:
-            entry["history_count"] = ask(record["sockets"][role], "head")["count"]
-            entry["service"] = "running"
-        except Exception as e:
-            entry["service"] = "not reachable: " + str(e)[:200]
-        try:
-            s = os.lstat(d)
-            entry["folder_owner"] = pwd.getpwuid(s.st_uid).pw_name
-            # A folder only its account can enter keeps the key from the owner.
-            entry["folder_private"] = stat.S_ISDIR(s.st_mode) and not (
-                s.st_mode & 0o077
-            )
-        except (KeyError, OSError):
-            entry["folder_owner"], entry["folder_private"] = "unknown", False
-        report["roles"][role] = entry
-    report["separated"] = owner.pw_uid != 0 and all(
-        r["service"] == "running"
-        and r["folder_private"]
-        and r["folder_owner"] == r["account"] != owner.pw_name
-        for r in report["roles"].values()
-    )
-    # The receiver service reports the trust it admits under. With an owner
-    # passkey in it, every new change needs an assertion from that passkey.
-    try:
-        answer = ask(record["sockets"]["receiver"], "status")
-    except Exception:
-        answer = {}
-    passkey = answer.get("owner_passkey")
-    report["passkey_required_by_receiver"] = passkey is not None
-    if passkey is not None:
-        report["receiver_passkey_origin"] = passkey["origin"]
-    if record.get("publish"):
-        report["protected_files"] = protected_files(
-            record, owner, answer.get("published") or {}
-        )
-    return report
-
-
-def protected_files(record, owner, answer):
-    """Whether the owner account can change the folder of protected files or
-    anything on the path to it, and what the receiver service says about it.
-    `not_published` names the documents whose files do not have the current
-    content (a name with a capital letter, or a failed write); `null` means
-    the service did not accept the folder."""
-    folder = Path(record["publish"])
-    try:
-        refuse_writable([folder], owner.pw_uid, "")
-        s = os.lstat(folder)
-        account = pwd.getpwuid(s.st_uid).pw_name
-        # A sticky folder passes the check above, but every account can add to it.
-        safe = account == record["users"]["receiver"] and not s.st_mode & 0o022
-    except (RuntimeError, KeyError, OSError):
-        safe = False
-    return dict(
-        folder=str(folder),
-        owner_cannot_change=safe,
-        receiver_writes_here=answer.get("folder") == str(folder),
-        not_published=answer.get("not_published"),
-    )
 
 
 def uninstall(home, base):

@@ -100,6 +100,7 @@ mod broker;
 mod mcp;
 mod owner_app;
 mod transport;
+mod web;
 mod zip;
 use openproof_witness::http;
 fn run() -> Result<serde_json::Value> {

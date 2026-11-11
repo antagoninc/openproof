@@ -8,7 +8,7 @@ guarantee. Reviewers and auditors start here.
 
 `scripts/tcb_count.py` makes the counts below: non-blank lines, without Rust
 test modules or Go test files. Validation runs it with `--check`, which fails
-when the total is over the budget in that script (4,890 lines), when a source
+when the total is over the budget in that script (4,340 lines), when a source
 file of the trusted crates is not listed, when a trusted crate depends on
 another workspace crate, when the review origin serves or loads a file that is
 not listed, or when the totals in this file differ from the count. Update this file in the same change that adds or removes trusted code.
@@ -40,7 +40,7 @@ With separate role accounts, the receiver and the witness run as
 
 | ID | Guarantee | Holds today when | Does not hold when |
 |---|---|---|---|
-| G1 | The receiver changes a document only for content, version and receiver that an active authority approved, at most once, before the approval expires. With an owner passkey in the trust, each approval also carries a user-verified passkey assertion over its digest. | An owner passkey is installed ([PASSKEY.md](PASSKEY.md)) and the receiver runs under its own account ([LOCAL-ROLES.md](LOCAL-ROLES.md)). `local_roles.py status` shows both: `"separated": true` and `"passkey_required_by_receiver": true`. | No passkey is installed and a process that runs as the owner's account reads `authority/key.secret`. With a passkey but without separate role accounts: that process changes the receiver's state directly. In every case: the owner confirms a passkey prompt for content they did not mean to approve, or someone with the administrator password changes the role accounts. |
+| G1 | The receiver changes a document only for content, version and receiver that an active authority approved, at most once, before the approval expires. With an owner passkey in the trust, each approval also carries a user-verified passkey assertion over its digest. | An owner passkey is installed ([PASSKEY.md](PASSKEY.md)) and the receiver runs under its own account ([LOCAL-ROLES.md](LOCAL-ROLES.md)). The status check (`roles_status.py`) shows both: `"separated": true` and `"passkey_required_by_receiver": true`. | No passkey is installed and a process that runs as the owner's account reads `authority/key.secret`. With a passkey but without separate role accounts: that process changes the receiver's state directly. In every case: the owner confirms a passkey prompt for content they did not mean to approve, or someone with the administrator password changes the role accounts. |
 | G2 | Every receipt is in the witness's signed, ordered history. Omission, reordering or a fork is detected against a trusted checkpoint. | The witness key is held by a party other than the receiver. | The witness runs on the owner's computer. Separate role accounts keep the witness key from the owner account, but the root key is still in the owner home and one administrator controls both accounts. |
 | G3 | A third party can verify an exported history offline, without Antagon code other than the Go verifier, given the trusted root and a current checkpoint. | The verifier binary and root are obtained independently of the archive. | The verifier or root comes from the same archive it checks. |
 
@@ -94,13 +94,81 @@ cannot install a key that someone else holds; only an attacker in the owner's
 account at set-up time can. Set up the passkey on a computer you trust at that
 time.
 
-`local_roles.py status` is the check of G1's condition. It uses the Python
-standard library only and asks the role services directly on their sockets:
-the receiver service reports the passkey from the trust it enforces. Install
-keeps a root-owned copy of the script in `BASE/libexec`. Run `status` from that
+The status check, `scripts/roles_status.py`, is the check of G1's condition.
+It uses the Python standard library only and asks the role services directly
+on their sockets: the receiver service reports the passkey from the trust it
+enforces. Install keeps a root-owned copy of it in `BASE/libexec`. Run that
 copy with the system Python. Code in the owner's account can still change what
 the owner's own terminal shows, so the check that does not depend on that
-account is `status` run by the administrator ([LOCAL-ROLES.md](LOCAL-ROLES.md)).
+account is the status check run by the administrator with `sudo`
+([LOCAL-ROLES.md](LOCAL-ROLES.md)).
+
+## Why the installer is not trusted
+
+`scripts/local_roles.py` runs one time as root. It is not on the trusted list,
+except three small regions (below), because the status check does not rely on
+it. The status check believes only what root owns. `"separated": true` means
+that the status check itself found all of this:
+
+- the install record is a regular file of root, not a link, that no other
+  account can write, under folders of root, and it is the record of the role
+  location that was asked for. If not, the status check stops with an error;
+- the role binary and the status check are such files too (`code_protected`);
+- the two role accounts are separate accounts without a login shell, neither
+  is root or the owner, and no other account name has one of their user IDs
+  (`accounts_separate`);
+- each role folder belongs to its role account, no other account can enter
+  it, and the role location is root's (`folder_private`);
+- the file that starts each service is a file of root and holds exactly what
+  an install puts in it, and nothing more: every key of the launchd file, or
+  the full text of the systemd unit, with no drop-in folder for it under
+  `/etc/systemd` or `/run/systemd/system` (`service_as_installed`). So it runs the root-owned binary, under the role
+  account, on the role's own state and key, and it answers only the owner and
+  root;
+- each socket is in a folder of its role account that no other account can
+  write, under folders of root (`socket_folder_protected`);
+- the process that listens on each socket runs under the role account, as
+  the system reports the account of the peer. The status check sends
+  nothing to another process and uses no answer from one;
+- both services answer.
+
+So a defect in `install` or `uninstall` either makes one of these values
+false, or it cannot break G1, with the limits below. The status check also
+reports the SHA-256 of the installed role binary, to compare with a binary
+from a build that you trust.
+
+What the status check cannot see:
+
+- **If a service account has a password.** The creation of the accounts,
+  without a password and without a shell, stays trusted: a `TCB:` region in
+  `local_roles.py`.
+- **If the role code and a role state are new files.** A process of the
+  owner that opened a file before the install could still write it, if the
+  installer had moved that file and not copied it. The copies of the role
+  binary, the status check and the role state stay trusted: the other two
+  `TCB:` regions. For the binary, `code_sha256` is a second check.
+- **The loaded job.** The status check reads the file that defines a
+  service, not the job that the service manager loaded from it, and not
+  other places from which systemd can take a unit or a change to one. Only
+  root can write those places or load another job.
+- **Access control lists.** The status check reads owners and modes.
+- **A copy of a role key outside the role location and the owner home.**
+  The status check reports role files that the owner can read in those two
+  places (`role_keys_out_of_owner_reach`). G1 does not depend on the secrecy
+  of a role key: no operation of the receiver takes a role key's signature
+  to change state, and with the receiver's key a process can sign a false
+  receipt but cannot change the receiver's state or a protected file. A
+  false receipt is a matter for G2 and G3, which need a witness that another
+  party holds. The role keys were also files in the owner home before the
+  install.
+- **An owner's account with administrator rights.** With `sudo`, a process
+  of that account can change everything here. Use a standard account as the
+  owner. G1's row names the administrator password as its limit.
+
+In the test mode (`--manager manual`), there is no definition file. The
+status check then compares the command line and the account of the running
+process, and it does not check the program file. Do not use this mode
+outside tests.
 
 These limits stay: code that controls the owner's browser or account can
 change what the screen shows, and the owner can confirm a prompt for content
@@ -118,11 +186,12 @@ they did not mean to approve. See the G1 row above.
 | `crates/openproof-receiver/src/publish.rs` | 54 | ✓ | | | Protected files: each approved document as a file in the receiver's folder ([PROTECTED-FILES.md](PROTECTED-FILES.md)) |
 | `crates/openproof-receiver/src/tlog.rs` | 198 | | ✓ | | The history as an RFC 6962 tree; C2SP checkpoints signed by the witness key |
 | `crates/openproof-receiver/src/clock.rs` | 9 | ✓ | ✓ | | The signing clock floor |
-| `crates/openproof-receiver/src/http.rs` | 197 | ✓ | ✓ | | Bounded HTTP/1.1 parsing; strict JSON (no duplicate keys or floats) |
+| `crates/openproof-receiver/src/http.rs` | 113 | ✓ | ✓ | | One bounded message for each connection; strict JSON (no duplicate keys or floats) |
 | `crates/openproof-receiver/src/keys.rs` | 45 | ✓ | ✓ | | Private key and bounded file reads |
 | `crates/openproof-receiver/src/files.rs` | 35 | ✓ | ✓ | | New and atomically replaced private files |
-| `crates/openproof-role/src/main.rs` | 408 | ✓ | ✓ | | The role service: Unix socket, peer account check, fixed operations, opt-in trust install that refuses role-key changes, optional protected files |
-| `scripts/local_roles.py` | 896 | ✓ | | | Installer (runs once as root): accounts, root-owned role binary, writability checks, a copy of the owner's role files made without following links, key and state move, daemons, the optional folder for protected files, uninstall; `status` |
+| `crates/openproof-role/src/main.rs` | 401 | ✓ | ✓ | | The role service: Unix socket, peer account check, fixed operations, opt-in trust install that refuses role-key changes, optional protected files |
+| `scripts/roles_status.py` | 340 | ✓ | | | The status check of the role accounts: what root owns (record, code, service definitions), the role accounts, folders and sockets, protected files; what the receiver service reports |
+| `scripts/local_roles.py`, `TCB:` regions | 97 | ✓ | | | Creation of the service accounts, without a password and without a shell; the copies of the role code and the role state |
 | `app/review.html`, `app/review.js` | 298 | ✓ | | | The review page: what the owner sees and approves |
 | `app/approval.js` | 122 | ✓ | | | The approval check and the passkey challenge, in the page |
 | `app/common.js` | 86 | ✓ | | | Requests and text-only rendering for the review origin's pages |
@@ -131,10 +200,10 @@ they did not mean to approve. See the G1 row above.
 | `reference/go-witness/main.go`, `archive.go`, `passkey.go`, `tlog.go` | 921 | | | ✓ | Independent Go verifier of exported histories, including owner assertions and, when given, a quorum of witness cosignatures over the whole history |
 | `scripts/verify_history.py` | 68 | | | ✓ | Wrapper that runs the independently obtained Go verifier |
 
-Totals: G1 3,698 lines, G2 2,010, G3 989. Files shared between guarantees
-count in each. **Total trusted code: 4,885 lines**. It was about 9,700 under
+Totals: G1 3,148 lines, G2 1,919, G3 989. Files shared between guarantees
+count in each. **Total trusted code: 4,335 lines**. It was about 9,700 under
 G1's condition before the reduction of 10 Nov 2026 (8,370 listed, plus 1,350
-for the role accounts), and 4,743 after it. Protected files then added 142.
+for the role accounts), 4,743 after it, and 4,885 with protected files.
 
 ## Protected files
 
@@ -142,8 +211,7 @@ With `install --publish`, the receiver service also writes each approved
 document as a file that every local account can read and only the receiver's
 account can change ([PROTECTED-FILES.md](PROTECTED-FILES.md)). This adds no
 guarantee. The code that writes the files (`publish.rs`) runs in the receiver
-service, and the installer makes the folder and `status` checks it, so both
-are listed. The option is off by default; without it, `publish.rs` does not
+service, and the status check checks the folder, so both are listed. The option is off by default; without it, `publish.rs` does not
 run.
 
 As before, style sheets are listed apart and not counted: the review origin's
@@ -164,6 +232,8 @@ The trusted Rust forbids `unsafe` code, except one function in
 | Area | Files | Why a defect cannot break a guarantee |
 |---|---|---|
 | Owner side | `crates/openproof-witness` (`gate.rs`, `broker.rs`, `owner_app.rs` outside its `TCB:` regions, `mcp.rs`, `transport.rs`, `zip.rs`, `verifier.rs`, `pages.rs`, `clock_recovery.rs`, `tlog.rs`) | The receiver checks every request it admits; the review page checks every approval before the passkey signs it |
+| Installer of the role accounts | `scripts/local_roles.py`, outside its `TCB:` region | The status check finds what it did, from root-owned files (above). It still runs as root one time: read it before you run it |
+| Owner app's web server | `crates/openproof-witness/src/web.rs` | HTTP for the browser. The role services no longer read HTTP |
 | Operator and test commands | `openproof-tool` (`crates/openproof-witness/src/bin/openproof-tool/`) | Not on the main path, never run by the role services. It refuses a role state that a role service owns. `approve` there signs without the gate's review binding; the receiver refuses such a request when a passkey is in force |
 | Workspace pages | `app/index.html`, `app/app.js`, `app/app.css` | They run on the workspace origin: an assertion obtained there is refused, and they cannot script the review origin's pages |
 | Witness network submitter | `scripts/tlog_submit.py` | It only carries bytes; cosignatures are checked when saved and again by the Go verifier ([WITNESS-NETWORK.md](WITNESS-NETWORK.md)) |
@@ -205,7 +275,15 @@ tag `experiments-2026-11-08`, and the TLS role service at commit `51c0978`
 5. Added (10 Nov 2026), 4,743 lines to 4,885: protected files. The receiver
    service can write approved documents as files (`publish.rs`), and the
    installer makes and checks their folder.
-6. Open. The aim is under 4,000 lines. Next candidates: a smaller installer
-   (`local_roles.py`, 896 lines, the largest trusted file)
-   and the full-package export bound inside admission in
-   `openproof-receiver/src/lib.rs`.
+6. Done (11 Nov 2026), 4,885 lines to 4,335:
+   - The status check is its own file and checks the full end state of an
+     install, from what root owns. The installer left the trusted list,
+     except three small regions: the creation of the service accounts and
+     the copies of the role code and the role state.
+   - The role services read one length-prefixed JSON message for each
+     connection. HTTP parsing left the trusted code and is now only in the
+     owner app.
+7. Open. The aim is under 4,000 lines. What is left is the receiver, the
+   role service, the review pages, the witness log and the Go verifier.
+   Candidates: the full-package export and its bound inside admission in
+   `openproof-receiver/src/lib.rs`, which the paged evidence can replace.

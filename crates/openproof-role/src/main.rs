@@ -12,7 +12,9 @@
 #[cfg(unix)]
 mod service {
     use openproof_core::{verify_signature, Signed};
-    use openproof_receiver::http::{fields, integer, read_request, respond, strict_json, text};
+    use openproof_receiver::http::{
+        fields, integer, read_message, strict_json, text, write_message,
+    };
     use openproof_receiver::{files, keys, publish, tlog, *};
     use serde_json::{json, Value};
     use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -218,32 +220,23 @@ mod service {
     fn connection(s: &Mutex<Role>, mut stream: UnixStream) -> Result<()> {
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-        // A malformed request gets no reply.
-        let request = read_request(&mut stream, 1_048_576)?;
+        // One message: `{"op": NAME, "body": {...}}`. A message that cannot
+        // be read gets no reply.
+        let raw = read_message(&mut stream, 1_048_576)?;
         let s = s.lock().map_err(|_| "lock")?;
-        let reply: Reply = if request.method != "POST" {
-            Err((405, json!({"error": "post_required"})))
-        } else if request.header("Content-Type") != Some("application/json")
-            || request.body.is_empty()
-        {
-            Err(bad())
-        } else {
-            match strict_json(&request.body) {
-                Ok(v) => s.dispatch(&request.path, &v),
-                Err(_) => Err(bad()),
-            }
-        };
+        let reply: Reply = (|| {
+            let v = strict_json(&raw).map_err(|_| bad())?;
+            let m = fields(&v, &["op", "body"], &[]).map_err(|_| bad())?;
+            s.dispatch(text(m, "op").map_err(|_| bad())?, &m["body"])
+        })();
         drop(s);
         let (code, body) = match reply {
             Ok(v) => (200, v),
             Err(e) => e,
         };
-        respond(
+        write_message(
             &mut stream,
-            code,
-            "application/json",
-            &[],
-            &serde_json::to_vec(&body)?,
+            &serde_json::to_vec(&json!({"code": code, "body": body}))?,
         )
     }
 
@@ -252,18 +245,18 @@ mod service {
             keys::trust(&self.trust).map_err(|_| unconfirmed())
         }
 
-        fn dispatch(&self, path: &str, v: &Value) -> Reply {
+        fn dispatch(&self, op: &str, v: &Value) -> Reply {
             let st = &self.state;
             let shape = |required: &[&str]| fields(v, required, &[]).map_err(|_| bad());
             let number =
                 |m: &serde_json::Map<String, Value>, k: &str| integer(m, k).map_err(|_| bad());
             let time = now();
-            match (path, self.receiver) {
-                ("/v1/head", _) => {
+            match (op, self.receiver) {
+                ("head", _) => {
                     shape(&[])?;
                     done(head(st).map(|count| json!({"count": count})))
                 }
-                ("/v1/status", _) => {
+                ("status", _) => {
                     // The trust this role admits under, from its own files: the
                     // check that an owner passkey is in force (docs/LOCAL-ROLES.md).
                     shape(&[])?;
@@ -278,11 +271,11 @@ mod service {
                                "published": published})
                     }))
                 }
-                ("/v1/install-trust", _) => {
+                ("install-trust", _) => {
                     let m = shape(&["signed"])?;
                     self.install_trust(&m["signed"])
                 }
-                ("/v1/document", true) => {
+                ("document", true) => {
                     let m = shape(&["document"])?;
                     let id = text(m, "document").map_err(|_| bad())?;
                     match document(st, id) {
@@ -295,12 +288,12 @@ mod service {
                         Err(_) => Err(unconfirmed()),
                     }
                 }
-                ("/v1/export", true) => {
+                ("export", true) => {
                     let m = shape(&["checkpoint"])?;
                     let t = self.trust()?;
                     done(parse(&m["checkpoint"]).and_then(|cp| export_verified(st, &t, cp, time)))
                 }
-                ("/v1/page", true) => {
+                ("page", true) => {
                     let m = shape(&["start", "checkpoint"])?;
                     let start = number(m, "start")?;
                     let t = self.trust()?;
@@ -308,7 +301,7 @@ mod service {
                         parse(&m["checkpoint"]).and_then(|cp| export_page(st, &t, cp, start, time)),
                     )
                 }
-                ("/v1/page-historical", true) => {
+                ("page-historical", true) => {
                     // A client may read history under its historical trust. That
                     // trust is used only for this read and is never installed.
                     let m = shape(&["start", "checkpoint", "trust"])?;
@@ -320,34 +313,34 @@ mod service {
                         export_page(st, &t, cp, start, at)
                     })())
                 }
-                ("/v1/receive", true) => {
+                ("receive", true) => {
                     let m = shape(&["request"])?;
                     let t = self.trust()?;
                     let r =
                         done(parse(&m["request"]).and_then(|q| apply(st, &q, &t, &self.key, time)));
                     // A change can be committed even when the reply is an error.
                     // A file that could not be written keeps its earlier version;
-                    // `/v1/status` reports it and it is written again later.
+                    // The `status` operation reports it and it is written again later.
                     if let Some(dir) = &self.publish {
                         let _ = publish::all(st, dir);
                     }
                     r
                 }
-                ("/v1/recover", true) => {
+                ("recover", true) => {
                     let m = shape(&["request"])?;
                     done(parse(&m["request"]).and_then(|q| recover(st, &q)))
                 }
-                ("/v1/receipt", true) => {
+                ("receipt", true) => {
                     let m = shape(&["sequence"])?;
                     let seq = number(m, "sequence")?;
                     done(stored_receipt(st, seq))
                 }
-                ("/v1/witness", false) => {
+                ("witness", false) => {
                     let m = shape(&["receipt"])?;
                     let t = self.trust()?;
                     done(parse(&m["receipt"]).and_then(|r| witness(st, &r, &t, &self.key, time)))
                 }
-                ("/v1/tlog-request", false) => {
+                ("tlog-request", false) => {
                     let m = shape(&["origin", "old"])?;
                     let origin = text(m, "origin").map_err(|_| bad())?;
                     let old = number(m, "old")?;
@@ -357,7 +350,7 @@ mod service {
                             .map(|body| json!({"origin": origin, "request": body})),
                     )
                 }
-                ("/v1/tlog-inclusion", false) => {
+                ("tlog-inclusion", false) => {
                     use base64::{engine::general_purpose::STANDARD, Engine};
                     let m = shape(&["sequence", "size"])?;
                     let (seq, size) = (number(m, "sequence")?, number(m, "size")?);
@@ -365,7 +358,7 @@ mod service {
                         json!({"proof": proof.iter().map(|h| STANDARD.encode(h)).collect::<Vec<_>>()})
                     }))
                 }
-                ("/v1/checkpoint", false) => {
+                ("checkpoint", false) => {
                     shape(&[])?;
                     let t = self.trust()?;
                     done(current_checkpoint(st, &t, &self.key, time))

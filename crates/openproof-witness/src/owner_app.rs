@@ -9,7 +9,8 @@
 //! `TCB:` markers are trusted (docs/TCB.md): the review page checks every
 //! approval it is given against what it shows.
 use crate::broker::{self, read_json, replace_json, save, ROLES};
-use crate::http::{fields, integer, read_request, respond, strict_json, text, Request};
+use crate::http::{fields, integer, strict_json, text};
+use crate::web::{read_request, respond, Request};
 use crate::{arg, call};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use openproof_witness::files::random_hex;

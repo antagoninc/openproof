@@ -5,11 +5,7 @@
 //! request it is sent (docs/TCB.md).
 use openproof_witness::Result;
 use serde_json::{json, Value};
-use std::{
-    io::{Read, Write},
-    path::Path,
-    time::Duration,
-};
+use std::{path::Path, time::Duration};
 
 /// The owner home and role for a role command whose state is `HOME/ROLE/state`
 /// in a home with a service client configuration.
@@ -96,7 +92,7 @@ fn post(home: &Path, role: &str, op: &str, body: &Value) -> Result<Value> {
     use std::os::unix::net::UnixStream;
     let config = crate::http::strict_json(&std::fs::read(home.join("service-client.json"))?)?;
     let m = crate::http::fields(&config, &["version", "receiver", "witness"], &[])?;
-    if m["version"] != "openproof-service-client/2" {
+    if m["version"] != "openproof-service-client/3" {
         return Err(
             "This home names role services from an earlier version. Reinstall them (docs/LOCAL-ROLES.md)."
                 .into(),
@@ -110,31 +106,19 @@ fn post(home: &Path, role: &str, op: &str, body: &Value) -> Result<Value> {
     let mut stream = UnixStream::connect(socket)?;
     stream.set_read_timeout(Some(Duration::from_secs(20)))?;
     stream.set_write_timeout(Some(Duration::from_secs(20)))?;
-    let raw = serde_json::to_vec(body)?;
-    write!(
-        stream,
-        "POST /v1/{op} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        raw.len()
+    // One message each way: a 4-byte length, then JSON (docs/LOCAL-ROLES.md).
+    crate::http::write_message(
+        &mut stream,
+        &serde_json::to_vec(&json!({"op": op, "body": body}))?,
     )?;
-    stream.write_all(&raw)?;
-    stream.flush()?;
-    let mut response = Vec::new();
-    Read::take(&mut stream, 1_200_000).read_to_end(&mut response)?;
-    let split = response
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .ok_or("incomplete response")?;
-    let head = std::str::from_utf8(&response[..split])?;
-    let code: u16 = head.split(' ').nth(1).ok_or("bad status line")?.parse()?;
-    let payload = &response[split + 4..];
+    let answer: Value =
+        serde_json::from_slice(&crate::http::read_message(&mut stream, 1_200_000)?)?;
+    let code = answer["code"].as_u64().ok_or("bad answer")?;
     if code != 200 {
-        return Err(format!(
-            "{role} service {code}: {}",
-            String::from_utf8_lossy(&payload[..payload.len().min(4096)])
-        )
-        .into());
+        let text: String = answer["body"].to_string().chars().take(4096).collect();
+        return Err(format!("{role} service {code}: {text}").into());
     }
-    serde_json::from_slice(payload).map_err(Into::into)
+    Ok(answer["body"].clone())
 }
 
 #[cfg(not(unix))]

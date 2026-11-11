@@ -38,20 +38,34 @@ def serve(role, state, key, trust, signed, sock, uids, accept=True, publish=None
 
 
 def post(sock, path, value):
-    """One request to a role service; returns (status, JSON body)."""
-    raw = json.dumps(value).encode()
+    """One request to a role service; returns (code, JSON body). The path
+    names the operation: "/v1/head" is the operation "head"."""
+    raw = json.dumps({"op": path.removeprefix("/v1/"), "body": value}).encode()
+    return exchange(sock, len(raw).to_bytes(4, "big") + raw)
+
+
+def raw(sock, wire):
+    """Send bytes to a role service and read all that it answers."""
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.settimeout(10)
         s.connect(str(sock))
-        s.sendall(
-            f"POST {path} HTTP/1.1\r\nContent-Type: application/json\r\n"
-            f"Content-Length: {len(raw)}\r\n\r\n".encode() + raw
-        )
         response = b""
-        while chunk := s.recv(65536):
-            response += chunk
-    head, _, body = response.partition(b"\r\n\r\n")
-    return int(head.split(b" ")[1]), json.loads(body)
+        try:
+            s.sendall(wire)
+            s.shutdown(socket.SHUT_WR)
+            while chunk := s.recv(65536):
+                response += chunk
+        except ConnectionError:
+            pass  # The service closed without reading all of it.
+    return response
+
+
+def exchange(sock, wire):
+    """One framed answer: a 4-byte length, then JSON with a code and a body."""
+    response = raw(sock, wire)
+    answer = json.loads(response[4:])
+    assert int.from_bytes(response[:4], "big") == len(response) - 4
+    return answer["code"], answer["body"]
 
 
 class Services:
@@ -93,7 +107,7 @@ class Services:
 
     def config(self):
         return {
-            "version": "openproof-service-client/2",
+            "version": "openproof-service-client/3",
             **{role: {"socket": str(s)} for role, s in self.sockets.items()},
         }
 
@@ -154,6 +168,35 @@ class RoleServiceTests(unittest.TestCase):
         self.assertEqual(s.request("receiver", "/v1/checkpoint", {})[0], 400)
         self.assertEqual(s.request("witness", "/v1/receive", {"request": {}})[0], 400)
         self.assertEqual(s.request("receiver", "/v1/head", {"extra": 1})[0], 400)
+        # A message that is not one bounded frame gets no answer. A frame
+        # that is not exactly an operation and a body is refused.
+        sock = s.sockets["receiver"]
+        frame = lambda text: len(text).to_bytes(4, "big") + text
+        for wire in [
+            b"",
+            b"\0\0",
+            b"\0\0\0\0",
+            b"\x7f\xff\xff\xff{}",
+            (1_048_577).to_bytes(4, "big") + b"x" * 1_048_577,
+            frame(b'{"op": "head", "body": {}}')[:-1],
+            b"POST /v1/head HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}",
+        ]:
+            self.assertEqual(raw(sock, wire), b"", wire[:40])
+        for text in [
+            b"not json",
+            b'{"op": "head"}',
+            b'{"op": "head", "body": {}, "extra": 1}',
+            b'{"op": "head", "op": "head", "body": {}}',
+            b'{"op": 1, "body": {}}',
+            b'{"op": "absent", "body": {}}',
+            b'{"op": "/v1/head", "body": {}}',
+            b'{"op": "head", "body": []}',
+        ]:
+            self.assertEqual(exchange(sock, frame(text))[0], 400, text)
+        self.assertEqual(
+            exchange(sock, frame(b'{"op": "head", "body": {}}')),
+            (200, {"count": 0}),
+        )
         q = self.approved("Public fixture")
         bad = dict(q, content="changed")
         self.assertEqual(s.request("receiver", "/v1/receive", {"request": bad})[0], 409)

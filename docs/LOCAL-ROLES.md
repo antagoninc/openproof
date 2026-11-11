@@ -14,7 +14,7 @@ operating-system accounts on the same computer.
 |---|---|
 | Receiver and witness keys are files in the owner home. | Each key is readable only by its service account. The owner home keeps no role keys. |
 | Receiver and witness state are SQLite files the owner can write. | Each state is owned by its service account, mode 700. |
-| The owner app runs the role commands itself. | The owner app reaches each role only through its role service (`openproof-role serve`) on a Unix socket. The service answers only the owner's account and root, by the user ID the kernel reports for the connection, and runs a fixed set of operations. Every change still passes the receiver's approval and passkey checks. |
+| The owner app runs the role commands itself. | The owner app reaches each role only through its role service (`openproof-role serve`) on a Unix socket. The service answers only the owner's account and root, by the user ID the kernel reports for the connection, and runs a fixed set of operations, one length-prefixed JSON message for each connection. Every change still passes the receiver's approval and passkey checks. |
 | Role code runs from the checkout. | The services run one root-owned copy of the `openproof-role` binary. It holds only the receiver and witness code (`openproof-receiver`, `openproof-core`), not the owner app, the broker or the gate. No interpreter or downloaded package is involved. `install` refuses to continue if the owner account can change the role location. |
 
 The owner keeps the approval gate, the authority key and the root key. Trust
@@ -51,8 +51,8 @@ replace a pinned owner passkey, and the service refuses a change of role keys.
    account with `su ADMIN -c 'sudo …'` and full paths.
 
    The install:
-   - copies the `openproof-role` binary and the script itself to
-     `/private/var/db/openproof/libexec/` as root;
+   - copies the `openproof-role` binary and the status check
+     (`roles_status.py`) to `/private/var/db/openproof/libexec/` as root;
    - creates the hidden accounts `_openproofrcv` and `_openproofwit`;
    - copies the role keys and state, and starts two launchd daemons
      (`com.antagon.openproof.receiver`, `.witness`) whose sockets are
@@ -85,18 +85,42 @@ Run it from the root-owned copy that install made, as your own account or as
 the administrator:
 
 ```
-/usr/bin/python3 -I /private/var/db/openproof/libexec/local_roles.py status --home outputs/passkey-trial
+/usr/bin/python3 -I /private/var/db/openproof/libexec/roles_status.py --home outputs/passkey-trial
 ```
 
-`status` asks the role services directly on their sockets. It never runs the
-owner app's binary or other code from the checkout. Code that runs in your
-account can still change what your own terminal shows, for example through
-your shell's start-up files. For a check that does not depend on your account,
-log in as the administrator and run the same command there.
+The status check asks the role services directly on their sockets. It never
+runs the owner app's binary, the installer or other code from the checkout,
+and it does not rely on what the installer did: it checks the result
+([TCB.md](TCB.md)). Code that runs in your account can still change what your
+own terminal shows, for example through your shell's start-up files. For a
+check that does not depend on your account, run the same command as the
+administrator with `sudo`. The role services answer only your account and
+root, so another account without `sudo` gets "not reachable".
 
-`"separated": true` means both services answer, and each role folder belongs to
-its service account and only that account can enter it, so your account cannot
-read either role key.
+The status check believes only what root owns. If the install record is not
+a file of root under folders of root, it stops with an error.
+
+`"separated": true` means all of this ([TCB.md](TCB.md) has the reasons and
+the limits):
+
+- the role binary and the status check are files of root that no other
+  account can write (`code_protected`). `code_sha256` is the SHA-256 of the
+  installed role binary. Compare it with a binary from a build that you
+  trust, for example one that you built before an agent ran in your account;
+- the two role accounts are separate accounts without a login shell
+  (`accounts_separate`);
+- each role folder belongs to its role account, and only that account can
+  enter it (`folder_private`);
+- the file that starts each service is a file of root and holds exactly what
+  an install puts in it (`service_as_installed`);
+- each socket is in a folder that only its role account can change
+  (`socket_folder_protected`), and the process that answers there runs under
+  that account;
+- both services answer, and the owner home belongs to the owner.
+
+`"role_keys_out_of_owner_reach": true` means that no role file is where your
+account can read it, in the role location or in the role folders of the owner
+home. The status check cannot find a copy in another place.
 
 `"passkey_required_by_receiver": true` means the receiver service itself
 reports an owner passkey in the trust it admits under: it then refuses every
@@ -125,7 +149,9 @@ renewal, separation probe, a refused connection from a third account, `status`
 and uninstall with real accounts, and the same for protected files with a
 failed install. It runs only as root on Linux with
 `OPENPROOF_ROLE_ACCOUNT_TEST=1`. `scripts/tests/test_role_service.py` checks the
-role service itself on every run: the peer check, each role's operations,
-tampering, replay, opt-in trust updates and protected files. The macOS account and launchd steps
+role service itself on every run: the peer check, the message form, each
+role's operations, tampering, replay, opt-in trust updates and protected
+files. The root test also puts the install into states that a defective
+installer could leave, and checks that the status check reports each one. The macOS account and launchd steps
 were checked on a Mac on 8 Nov 2026, with the earlier TLS transport; confirm
 them with `status` after every install.

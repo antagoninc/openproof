@@ -7,7 +7,8 @@
 Counts are non-blank lines. Rust test modules (`#[cfg(test)]` or
 `#[cfg(all(test, ...))]` followed by `mod`) and Go `_test.go` files are not
 counted. In a file listed with `regions`, only the lines between
-`// TCB:begin` and `// TCB:end` are counted.
+`// TCB:begin` and `// TCB:end` (`# TCB:begin` and `# TCB:end` in Python) are
+counted.
 
 `--check` fails when:
 - the trusted code total is over BUDGET;
@@ -25,7 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # The trusted code total may not grow past this without a TCB.md change.
 # The aim stated in docs/TCB.md is under 4,000.
-BUDGET = 4890
+BUDGET = 4340
 G1, G2, G3 = "G1", "G2", "G3"
 # path: (guarantees, what it is trusted for, counting)
 TRUSTED = {
@@ -41,7 +42,8 @@ TRUSTED = {
     "crates/openproof-receiver/src/keys.rs": ((G1, G2), "key and file reads"),
     "crates/openproof-receiver/src/files.rs": ((G1, G2), "atomic file writes"),
     "crates/openproof-role/src/main.rs": ((G1, G2), "role service"),
-    "scripts/local_roles.py": ((G1,), "account installer, status"),
+    "scripts/roles_status.py": ((G1,), "check of the role accounts"),
+    "scripts/local_roles.py": ((G1,), "accounts; copies of code and state", "regions"),
     "app/review.html": ((G1,), "review page"),
     "app/review.js": ((G1,), "review page"),
     "app/approval.js": ((G1,), "approval check, challenge"),
@@ -70,11 +72,11 @@ def count(path, regions=False):
         kept, inside = [], False
         for line in lines:
             mark = line.strip()
-            if mark == "// TCB:begin":
+            if mark in ("// TCB:begin", "# TCB:begin"):
                 if inside:
                     raise ValueError(f"{path}: nested TCB:begin")
                 inside = True
-            elif mark == "// TCB:end":
+            elif mark in ("// TCB:end", "# TCB:end"):
                 if not inside:
                     raise ValueError(f"{path}: TCB:end without begin")
                 inside = False
