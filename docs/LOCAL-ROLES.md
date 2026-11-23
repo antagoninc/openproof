@@ -204,7 +204,8 @@ passkey and two executed changes; the status check as the owner, with every
 value true; one passkey replacement with the root-owned tool, run through
 the administrator account from a standard login, which the receiver wrote as
 receipt 3; and one change that the new passkey approved, which was executed
-and checked locally, with a history of 4 on both roles. The browser was
-Brave. macOS verified the user with the login password, not with Touch ID.
-The refusals and the repair cases of the replacement were tested on Linux
-only.
+and checked locally, with a history of 4 on both roles; and `uninstall` of
+that install, which returned the history of 4 to the owner home and removed
+the accounts and the service files. The browser was Brave. macOS verified
+the user with the login password, not with Touch ID. The refusals and the
+repair cases of the replacement were tested on Linux only.
