@@ -449,7 +449,8 @@ class RoleServiceTests(unittest.TestCase):
         administrator = os.getuid() == 0
         other = 65534 if administrator else os.getuid()
         os.chmod(self.s, 0o755)
-        s = self.services = Services(self.d, self.s, self.h, uids=[os.getuid(), other])
+        uids = sorted({os.getuid(), other})
+        s = self.services = Services(self.d, self.s, self.h, uids=uids)
 
         def from_other(role, value):
             """The request from an account that is not the administrator."""

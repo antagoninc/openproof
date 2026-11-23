@@ -93,6 +93,10 @@ no replacement.
    sudo /usr/bin/python3 -I /private/var/db/openproof/libexec/roles_passkey.py
    ```
 
+   If your login is a standard account, the administrator runs the same
+   tool through the administrator account:
+   `su ADMIN -c 'sudo /usr/bin/python3 -I /private/var/db/openproof/libexec/roles_passkey.py'`.
+
    On Linux the tool is `/var/lib/openproof/libexec/roles_passkey.py`. The
    administrator runs this tool and no other program: a file in your home, or
    text on another screen, can name any command. The tool reads which home it
@@ -141,7 +145,9 @@ Limits:
   wrong code, as for the first set-up.
 - A home can replace its passkey 8 times: a trust holds at most 8 retired
   passkeys.
-- The replacement was tested on Linux. It was not yet run on a Mac.
+- The replacement was tested on Linux. On a Mac it was run one time by hand
+  (23 Nov 2026, [LOCAL-ROLES.md](LOCAL-ROLES.md)). The refusals and the
+  repair cases were tested on Linux only.
 
 ## Trust and request fields
 

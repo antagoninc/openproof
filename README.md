@@ -106,7 +106,7 @@ The Go verifier is separately implemented without calling Rust, but it shares pr
 
 ## Validation
 
-The local run on 23 Nov 2026 (Linux, as root) passed 157 Rust tests, the Go tests, the Go/Rust cross-implementation suites (231 cases for the witnessed history), 65 Python tests of the Rust owner app, MCP server, broker, role service, review page and trusted-code count, both browser workflows, and the six separate-role-account tests as root. The earlier v0.9 milestone record is in the [sanitized validation summary](docs/VALIDATION.md), which explains scope and limitations. Generated logs, private keys, databases, browser sessions and runtime homes are deliberately excluded from Git.
+The local run on 23 Nov 2026 (Linux, as root, and the Python tests also as an account that is not root) passed 157 Rust tests, the Go tests, the Go/Rust cross-implementation suites (231 cases for the witnessed history), 65 Python tests of the Rust owner app, MCP server, broker, role service, review page and trusted-code count, both browser workflows, and the six separate-role-account tests as root. The earlier v0.9 milestone record is in the [sanitized validation summary](docs/VALIDATION.md), which explains scope and limitations. Generated logs, private keys, databases, browser sessions and runtime homes are deliberately excluded from Git.
 
 To run the complete validation, install `cargo-audit` and use a fresh directory:
 

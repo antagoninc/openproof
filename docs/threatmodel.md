@@ -278,8 +278,8 @@ shows that one case behaves as written. It does not show that no defect exists.
 - `fuzz/fuzz_targets`: five fuzz targets (`evidence`, `policy`, `trust`,
   `witness`, `witness_state`), run in bounded campaigns.
 
-Checked by hand on a Mac only: the launchd install, Touch ID, and the
-protected files ([LOCAL-ROLES.md](LOCAL-ROLES.md),
+Checked by hand on a Mac only: the launchd install, Touch ID, the protected
+files and one passkey replacement ([LOCAL-ROLES.md](LOCAL-ROLES.md),
 [PROTECTED-FILES.md](PROTECTED-FILES.md)).
 
 ## Open
@@ -287,7 +287,6 @@ protected files ([LOCAL-ROLES.md](LOCAL-ROLES.md),
 1. An independent witness, so that G2's condition can be met.
 2. A human security review of the trusted code.
 3. A signed release, and a build reproduced by another party.
-4. A run of the passkey replacement on a Mac.
 
 Change this file in the same change that moves a boundary or adds trusted
 code.

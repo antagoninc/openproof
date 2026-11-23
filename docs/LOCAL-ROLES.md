@@ -81,6 +81,22 @@ protected files, if there was one, is already removed. In both cases,
 correct the cause and run the same command again. The home and the role
 location must be on the same volume.
 
+If `install` stops with "Account _openproofrcv already exists", there are two
+cases. If the role location holds an install (`install.json`), run
+`uninstall` first. If it does not, the account is a leftover. This was seen
+on 23 Nov 2026 on a Mac that was set up with Migration Assistant from a Mac
+with an install: the two accounts and their groups were there, and the role
+location and the service files were not. `install` does not use an account
+that it did not create. An administrator removes the two accounts and their
+groups, then runs `install` again. On macOS:
+
+```
+sudo dscl . -delete /Users/_openproofrcv
+sudo dscl . -delete /Users/_openproofwit
+sudo dscl . -delete /Groups/_openproofrcv
+sudo dscl . -delete /Groups/_openproofwit
+```
+
 ## Check
 
 Run it from the root-owned copy that install made, as your own account or as
@@ -174,10 +190,21 @@ owner's account is refused by the tool and by the service; a wrong code, a
 prepared replacement with another key and one for another address change
 nothing; the administrator's replacement is a receipt in the history; and a
 replacement that stopped in the middle, lost its prepared file or outlived
-its trust is completed. The replacement was not yet run on a Mac.
+its trust is completed.
 
 On a Mac (launchd, 10 Nov 2026), these were checked by hand: `uninstall` of a
 version 3 install, `install --publish` of version 4, and the status check as
 the owner and as the administrator with `sudo`, with every value true. The
 states of a defective install were tested on Linux only. Confirm an install
 with the status check.
+
+On a Mac (launchd, macOS 27.2.1, commit `2fa7499`, 23 Nov 2026), these were
+checked by hand, one time each: `install` of version 5 for a new home with a
+passkey and two executed changes; the status check as the owner, with every
+value true; one passkey replacement with the root-owned tool, run through
+the administrator account from a standard login, which the receiver wrote as
+receipt 3; and one change that the new passkey approved, which was executed
+and checked locally, with a history of 4 on both roles. The browser was
+Brave. macOS verified the user with the login password, not with Touch ID.
+The refusals and the repair cases of the replacement were tested on Linux
+only.

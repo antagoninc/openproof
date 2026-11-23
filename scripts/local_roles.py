@@ -100,7 +100,7 @@ def account_exists(name):
 # service accounts, without a password and without a shell, stays trusted.
 def create_account(name, description):
     if account_exists(name):
-        raise RuntimeError(f"Account {name} already exists. Run uninstall first.")
+        raise RuntimeError(f"Account {name} already exists (docs/LOCAL-ROLES.md).")
     if MAC:
         used = set()
         for kind, field in [("/Users", "UniqueID"), ("/Groups", "PrimaryGroupID")]:
