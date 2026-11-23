@@ -106,7 +106,7 @@ The Go verifier is separately implemented without calling Rust, but it shares pr
 
 ## Validation
 
-The local run on 10 Nov 2026 (Linux) passed 155 Rust tests, the Go tests, the Go/Rust cross-implementation suites, 63 Python tests of the Rust owner app, MCP server, broker, role service, review page and trusted-code count, both browser workflows, and the five separate-role-account tests as root. The earlier v0.9 milestone record is in the [sanitized validation summary](docs/VALIDATION.md), which explains scope and limitations. Generated logs, private keys, databases, browser sessions and runtime homes are deliberately excluded from Git.
+The local run on 23 Nov 2026 (Linux, as root) passed 157 Rust tests, the Go tests, the Go/Rust cross-implementation suites (231 cases for the witnessed history), 65 Python tests of the Rust owner app, MCP server, broker, role service, review page and trusted-code count, both browser workflows, and the six separate-role-account tests as root. The earlier v0.9 milestone record is in the [sanitized validation summary](docs/VALIDATION.md), which explains scope and limitations. Generated logs, private keys, databases, browser sessions and runtime homes are deliberately excluded from Git.
 
 To run the complete validation, install `cargo-audit` and use a fresh directory:
 
@@ -128,6 +128,7 @@ The workflow performs checks and builds only. It does not publish packages, uplo
 | `app` | The owner app's pages, built into the binary | The review page, the passkey set-up page and their modules (G1); not the workspace |
 | `reference/go-witness` | Separate Go verifier of exported histories | Yes (G3) |
 | `scripts/roles_status.py` | Status check for separate role accounts | Yes (G1) |
+| `scripts/roles_passkey.py` | The administrator's replacement of a lost owner passkey | Yes (G1) |
 | `scripts/local_roles.py` | Installer for separate role accounts | Account creation only (G1) |
 | `crates/openproof-runtime`, `crates/openproof-trust`, `crates/openproof-cli` | Original v1 action bundles | No; kept for compatibility |
 | `integrations/trace` | Links OpenProof approvals to TRACE Trust Records as `approval-outcome` references | No |

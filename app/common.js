@@ -78,6 +78,24 @@ export function toBase64url(buffer) {
     .replace(/=+$/, "");
 }
 
+/**
+ * The code of a passkey, as the administrator's tool computes it
+ * (scripts/roles_passkey.py): the first 20 hexadecimal characters of the
+ * SHA-256 of the 65-byte P-256 point in hexadecimal, the relying party and
+ * the origin, one on each line, in groups of four. `publicKey` is the key as
+ * the authenticator returned it to the page, in base64url; the point is its
+ * last 65 bytes. The page gives its own host name and origin.
+ */
+export async function passkeyCode(publicKey, rpId, origin) {
+  const der = fromBase64url(publicKey);
+  const point = der.slice(-65);
+  if (der.length !== 91 || point[0] !== 4) throw Error("The passkey must use ES256 (P-256).");
+  const hex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  const text = new TextEncoder().encode([hex(point), rpId, origin].join("\n"));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", text));
+  return hex(digest.slice(0, 10)).toUpperCase().match(/.{4}/g).join("-");
+}
+
 /** Mark a button busy while `fn` runs; show a failure as a message. */
 export async function busy(button, fn) {
   button.disabled = true;

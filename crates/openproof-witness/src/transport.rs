@@ -53,6 +53,7 @@ pub fn forward(a: &[&str], value: Option<&Value>) -> Result<Option<Value>> {
     let (op, body) = match a {
         ["head", _] => ("head", json!({})),
         ["role-status", _] => ("status", json!({})),
+        ["role-trust", _] => ("signed-trust", json!({})),
         ["receive", ..] => ("receive", json!({"request": need(value)?})),
         ["recover", _] => ("recover", json!({"request": need(value)?})),
         ["witness", ..] => ("witness", json!({"receipt": need(value)?})),

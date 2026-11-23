@@ -162,22 +162,66 @@ func verifyAssertion(a map[string]any, k map[string]any, approvalDigest string) 
 	need(ecdsa.VerifyASN1(passkeyPoint(k["public_key"]), signed[:], der))
 }
 
-// ownerAssertion: an assertion is required exactly when the trust has a passkey and
-// the receipt sequence is at or after its from_sequence; otherwise it must be absent.
+// ownerPasskeys: every owner passkey of a trust, oldest first: the retired ones,
+// then the current one.
+func ownerPasskeys(t map[string]any) []any {
+	var all []any
+	if r, ok := t["retired_owner_passkeys"]; ok {
+		all = append(all, arr(r)...)
+	}
+	if k, ok := t["owner_passkey"]; ok {
+		all = append(all, k)
+	}
+	return all
+}
+
+// ownerAssertion: an assertion is required exactly when a passkey of the trust
+// was in force at the receipt sequence: the one with the latest from_sequence at
+// or before it. Otherwise it must be absent.
 func ownerAssertion(q map[string]any, t map[string]any, approvalDigest string, sequence uint64) {
 	a, present := q["owner_assertion"]
-	k, configured := t["owner_passkey"]
-	required := configured && sequence >= num(obj(k)["from_sequence"])
-	need(required == present)
-	if required {
+	var k any
+	for _, p := range ownerPasskeys(t) {
+		if sequence >= num(obj(p)["from_sequence"]) {
+			k = p
+		}
+	}
+	need((k != nil) == present)
+	if k != nil {
 		verifyAssertion(obj(a), obj(k), approvalDigest)
 	}
 }
 
-// samePasskey: once a trust in a history has an owner passkey, later trusts keep it.
-func samePasskey(old, next map[string]any) {
-	if k, ok := old["owner_passkey"]; ok {
-		n, kept := next["owner_passkey"]
-		need(kept && bytes.Equal(canonical(k), canonical(n)))
+// replacementReceipt: every owner passkey after the first one starts right after
+// a receiver receipt of kind "passkey" that carries its hash. True when r is that
+// receipt. A "passkey" receipt that the trust does not explain is refused, and so
+// is a replacement without its receipt.
+func replacementReceipt(t, r map[string]any) bool {
+	var starts any
+	for i, p := range ownerPasskeys(t) {
+		if i > 0 && num(obj(p)["from_sequence"]) == num(r["sequence"])+1 {
+			starts = p
+		}
+	}
+	replaced := str(r["kind"]) == "passkey"
+	need((starts != nil) == replaced)
+	if replaced {
+		need(str(r["document"]) == "" && num(r["document_version"]) == 0 && str(r["reason"]) == "" && str(r["approval_sha256"]) == zero && str(r["content_sha256"]) == hash(string(canonical(starts))))
+	}
+	return replaced
+}
+
+// samePasskey: once a trust in a history has owner passkeys, a later trust keeps
+// them as they are. It can add a passkey only when the receipt before its start is
+// still to come, so that this receipt is checked under the later trust.
+func samePasskey(old, next map[string]any, count uint64) {
+	a, b := ownerPasskeys(old), ownerPasskeys(next)
+	need(len(b) >= len(a))
+	for i, k := range b {
+		if i < len(a) {
+			need(bytes.Equal(canonical(a[i]), canonical(k)))
+		} else if i > 0 {
+			need(num(obj(k)["from_sequence"]) > count+1)
+		}
 	}
 }

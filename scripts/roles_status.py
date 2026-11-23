@@ -19,7 +19,7 @@ import struct, sys, time
 from pathlib import Path
 
 ROLES = ("receiver", "witness")
-VERSION = "openproof-local-roles/4"
+VERSION = "openproof-local-roles/5"
 MAC = platform.system() == "Darwin"
 BASE = Path("/private/var/db/openproof" if MAC else "/var/lib/openproof")
 # Where the service managers read their definitions.
@@ -187,11 +187,11 @@ def peer_uid(s):
     ]
 
 
-def ask(sock, op, uid=None):
+def ask(sock, op, uid=None, body=None):
     """One request to a role service on its Unix socket: a 4-byte length and
     a JSON message each way. With `uid`, nothing is sent and no answer is
     used unless the process that listens there runs under that account."""
-    raw = json.dumps({"op": op, "body": {}}).encode()
+    raw = json.dumps({"op": op, "body": body or {}}).encode()
     end = time.monotonic() + 20
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.settimeout(20)
@@ -309,7 +309,9 @@ def status(home, base):
         entry["socket_folder_protected"] = account_folder(Path(sock).parent, uid)
         entry["service_as_installed"] = service_as_installed(record, role, owner.pw_uid)
         report["roles"][role] = entry
-    files = [code / "openproof-role", code / "roles_status.py"]
+    files = [
+        code / n for n in ("openproof-role", "roles_status.py", "roles_passkey.py")
+    ]
     report["code_protected"] = all(root_only(f) for f in files)
     if report["code_protected"]:
         # Compare this with the SHA-256 of a role binary from a build that you trust.

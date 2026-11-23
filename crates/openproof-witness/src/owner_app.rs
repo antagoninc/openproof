@@ -52,12 +52,15 @@ const WORKSPACE_FILES: [&str; 6] = [
     "/base.css",
     "/app.css",
 ];
-const REVIEW_POSTS: [&str; 5] = [
+const REVIEW_POSTS: [&str; 8] = [
     "/api/review",
     "/api/approve",
     "/api/approve/passkey",
     "/api/passkey/register/begin",
     "/api/passkey/register/finish",
+    "/api/passkey/replace/begin",
+    "/api/passkey/replace/prepare",
+    "/api/passkey/replace/complete",
 ];
 fn serves(site: Site, path: &str, post: bool) -> bool {
     match (site, post) {
@@ -108,6 +111,12 @@ const NEEDS_TRUST: [&str; 6] = [
     "/api/recover",
     "/api/paging",
 ];
+/// A passkey is replaced only through the administrator (docs/PASSKEY.md).
+const NO_REPLACEMENT: &str =
+    "A passkey can be replaced only when one is set up and the receiver and the witness run under their own accounts.";
+/// The administrator's tool stopped between the receiver and the witness.
+const WITNESS_BEHIND: &str =
+    "The receiver has a new owner passkey and the witness does not have it yet. The administrator must run roles_passkey.py again.";
 const INTERRUPTED: &str =
     "Operation interrupted. Retry the same approved action to recover its outcome; do not create a replacement approval.";
 
@@ -537,6 +546,22 @@ impl Owner {
         if self.passkey()?.0.is_some() {
             return Err("An owner passkey is already set up".into());
         }
+        self.challenge()
+    }
+
+    /// The first step of a replacement: a challenge for the new passkey.
+    fn replace_begin(&mut self) -> Result<Value> {
+        {
+            let _l = broker::lock(&self.home)?;
+            broker::admission(&self.home)?;
+        }
+        if self.passkey()?.0.is_none() || !self.home.join("service-client.json").exists() {
+            return Err(NO_REPLACEMENT.into());
+        }
+        self.challenge()
+    }
+
+    fn challenge(&mut self) -> Result<Value> {
         if !self.localhost() {
             return Err("Passkeys need the localhost origin".into());
         }
@@ -547,6 +572,37 @@ impl Owner {
     }
 
     fn register_finish(&mut self, v: &Value) -> Result<Value> {
+        let (credential, point) = self.registered(v)?;
+        let result = broker::enroll_passkey(&self.home, &point, RP_ID, &self.origin)?;
+        replace_json(
+            self.home.join("passkey.json"),
+            &json!({"credential_id": credential, "public_key": point}),
+        )?;
+        Ok(json!({"status": "passkey_installed", "installed_epoch": result["installed_epoch"]}))
+    }
+
+    /// The second step of a replacement: a root-signed trust with the new
+    /// passkey, prepared for the administrator. It changes nothing by itself.
+    fn replace_prepare(&mut self, v: &Value) -> Result<Value> {
+        if self.passkey()?.0.is_none() {
+            return Err(NO_REPLACEMENT.into());
+        }
+        if !self.home.join("service-client.json").exists() {
+            return Err(NO_REPLACEMENT.into());
+        }
+        let (credential, point) = self.registered(v)?;
+        broker::prepare_passkey_replacement(
+            &self.home,
+            &point,
+            RP_ID,
+            &self.origin,
+            Some(&credential),
+        )?;
+        Ok(json!({"status": "prepared"}))
+    }
+
+    /// A registration that this app started: the credential and its P-256 key.
+    fn registered(&mut self, v: &Value) -> Result<(String, String)> {
         let m = fields(
             v,
             &[
@@ -594,12 +650,7 @@ impl Owner {
         let key = p256::PublicKey::from_public_key_der(&unb64(text(m, "public_key")?, 1024)?)
             .map_err(|_| "passkey must be ECDSA P-256")?;
         let point = hex::encode(key.to_sec1_point(false).as_bytes());
-        let result = broker::enroll_passkey(&self.home, &point, RP_ID, &self.origin)?;
-        replace_json(
-            self.home.join("passkey.json"),
-            &json!({"credential_id": credential, "public_key": point}),
-        )?;
-        Ok(json!({"status": "passkey_installed", "installed_epoch": result["installed_epoch"]}))
+        Ok((credential.to_string(), point))
     }
 
     fn archive(&self) -> Result<Value> {
@@ -658,7 +709,10 @@ impl Owner {
     }
 
     fn session(&self) -> Value {
-        json!({"csrf": self.csrf, "review": self.origin, "workspace": self.workspace})
+        // `passkey` and `roles` only choose what the set-up page offers.
+        json!({"csrf": self.csrf, "review": self.origin, "workspace": self.workspace,
+               "passkey": self.passkey().is_ok_and(|p| p.0.is_some()),
+               "roles": self.home.join("service-client.json").exists()})
     }
 
     fn get(&self, r: &Request) -> std::result::Result<(Vec<u8>, &'static str), (u16, String)> {
@@ -792,6 +846,20 @@ impl Owner {
                 .map_err(invalid)
                 .and_then(|_| self.register_begin().map_err(invalid)),
             "/api/passkey/register/finish" => self.register_finish(&v).map_err(invalid),
+            "/api/passkey/replace/begin" => fields(&v, &[], &[])
+                .map_err(invalid)
+                .and_then(|_| self.replace_begin().map_err(|_| (409, NO_REPLACEMENT.into()))),
+            "/api/passkey/replace/prepare" => self.replace_prepare(&v).map_err(invalid),
+            "/api/passkey/replace/complete" => fields(&v, &[], &[])
+                .map_err(invalid)
+                .and_then(|_| {
+                    broker::finish_passkey_replacement(&self.home).map_err(|e| {
+                        match e.to_string().contains("roles_passkey.py") {
+                            true => (409, WITNESS_BEHIND.to_string()),
+                            false => interrupted(e),
+                        }
+                    })
+                }),
             "/api/commit" => id().and_then(|i| {
                 broker::commit(&self.home, &i, false)
                     .map(&mut strip)
@@ -809,11 +877,14 @@ impl Owner {
             // and installed in the receiver, the witness and the verifier. The
             // roles keep their keys and a pinned owner passkey unchanged.
             "/api/renew" => fields(&v, &[], &[]).map_err(invalid).and_then(|_| {
-                broker::renew(&self.home).map_err(|_| {
+                broker::renew(&self.home).map_err(|e| {
                     (
                         409,
-                        "The trust could not be renewed. Check that the receiver and the witness are running, then try again."
-                            .to_string(),
+                        match e.to_string().contains("roles_passkey.py") {
+                            true => WITNESS_BEHIND,
+                            false => "The trust could not be renewed. Check that the receiver and the witness are running, then try again.",
+                        }
+                        .to_string(),
                     )
                 })
             }),
@@ -972,6 +1043,11 @@ pub fn main(rest: &[&str]) -> Result<()> {
             &json!({"document": "welcome-report", "expected_version": 0,
             "content": "Welcome to OpenProof. This public demonstration stores exactly this text in the local receiver database. Review, approve, and execute are separate decisions. No model was called."}),
         )?;
+    }
+    // The administrator can have replaced the owner passkey while the app was
+    // closed. Then the owner's verifier and trust files follow now.
+    if broker::finish_passkey_replacement(&owner.home).is_ok_and(|r| r["status"] == "replaced") {
+        println!("The administrator replaced the owner passkey.");
     }
     // The local trust lasts one day. Renew it at start when it has ended or
     // ends within two hours, as the Renew button does. The root key that signs

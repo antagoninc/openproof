@@ -73,6 +73,76 @@ The terminal approval command (`witness_workflow.py approve`) uses the gate
 command `gate-approve-terminal`, which refuses when the trust has a passkey.
 Approve in the owner app.
 
+## Replace a lost passkey
+
+A passkey can be lost, or you can want another one. The receiver refuses a
+trust that changes the passkey, also with the root's signature: the root key
+is a file in your home, and a program in your account could use it. So the
+replacement needs the administrator of the computer. It needs
+[separate role accounts](LOCAL-ROLES.md). Without them, the owner app offers
+no replacement.
+
+1. In the workspace, select **Replace passkey**. It opens the set-up page.
+   Select **Make the new passkey** and confirm on your device.
+2. The page shows a **code** of 20 characters. The page computes the code
+   itself, from the passkey that it made and from its own address. Keep the
+   page open.
+3. The administrator runs the root-owned tool. On macOS:
+
+   ```
+   sudo /usr/bin/python3 -I /private/var/db/openproof/libexec/roles_passkey.py
+   ```
+
+   On Linux the tool is `/var/lib/openproof/libexec/roles_passkey.py`. The
+   administrator runs this tool and no other program: a file in your home, or
+   text on another screen, can name any command. The tool reads which home it
+   serves from the install record, which is a file of root.
+
+   The tool asks for the code. The administrator types the code **from your
+   page**. The tool continues only when this is the code of the passkey that
+   was prepared in your home. If the tool refuses the code, stop: a program
+   in your account can have changed the prepared replacement.
+4. Select **The administrator has confirmed**. Your next approval uses the
+   new passkey.
+
+What happens:
+
+- The receiver service and the witness service take the replacement only
+  from user ID 0. A request from your account is refused.
+- The receiver writes a receipt of kind `passkey` into its history, with the
+  SHA-256 of the new passkey record. The witness adds it like every receipt.
+  So each replacement shows in the history and in every export.
+- The new trust keeps the earlier passkey in `retired_owner_passkeys`. The
+  verifiers check each approval against the passkey that was in force at its
+  receipt: the old one before the `passkey` receipt, the new one after it.
+- A request that the old passkey approved and that was not executed before
+  the replacement is refused afterwards. Review it again.
+
+When something stops in the middle:
+
+- A prepared replacement is good for one day, and only while no change is
+  executed and no trust is renewed after it was prepared. If the tool says
+  that the receiver refused it, make the new passkey again.
+- The receiver decides which passkey is in force. Your side follows the
+  receiver: when you select the button, when the owner app starts, and when
+  the trust is renewed. This also works when the prepared file is lost or
+  its trust has ended.
+- If the tool stops after the receiver and before the witness, the owner app
+  says that the administrator must run the tool again. That run brings the
+  witness into step and asks for no code.
+
+Limits:
+
+- The administrator can replace the passkey at any time. This was already
+  the administrator's power: root can change every account's files.
+- The tool cannot see who typed the code. Give the code only to the
+  administrator, and only when you started the replacement yourself.
+- Code that controls your browser when you make the new passkey can show a
+  wrong code, as for the first set-up.
+- A home can replace its passkey 8 times: a trust holds at most 8 retired
+  passkeys.
+- The replacement was tested on Linux. It was not yet run on a Mac.
+
 ## Trust and request fields
 
 `owner_passkey` in the trust:
@@ -89,15 +159,32 @@ and `signature`. All three are base64url without padding. The signature is the
 DER ECDSA signature as the browser returns it. Limits: authenticator data at
 most 1024 bytes, client data at most 2048 bytes, signature at most 80 bytes.
 
-Both fields are optional. A trust or request without them has the same bytes,
-digest and signature as before.
+`retired_owner_passkeys` in the trust: the passkeys that were replaced,
+oldest first, each with the same four fields. At most 8. The list is absent
+unless a passkey was replaced; an empty list is refused. Each passkey starts
+at a later sequence than the one before it.
+
+A receipt of kind `passkey` has an empty `document` and `reason`,
+`document_version` 0, an all-zero `approval_sha256`, and in `content_sha256`
+the SHA-256 of the canonical bytes of the passkey that starts at the next
+sequence.
+
+These fields are optional. A trust or request without them has the same
+bytes, digest and signature as before. A verifier from before 23 Nov 2026
+refuses a history that holds a `passkey` receipt.
 
 ## The exact rule
 
-A request needs an assertion exactly when the trust has `owner_passkey` and
-the receipt sequence is at least `from_sequence`. Otherwise it must not carry
-one. The receiver is stricter: with a passkey in the trust, every new
-admission needs an assertion.
+A request needs an assertion exactly when a passkey of the trust was in force
+at its receipt sequence: the passkey with the latest `from_sequence` at or
+before it, among `owner_passkey` and `retired_owner_passkeys`. The assertion
+must be from that passkey. Without a passkey in force, the request must not
+carry one. The receiver is stricter: with a passkey in the trust, every new
+admission needs an assertion from the current one.
+
+Every passkey after the first starts right after a receiver receipt of kind
+`passkey` that carries its hash. A `passkey` receipt that the trust does not
+explain is refused, and so is a later passkey without its receipt.
 
 An assertion is valid when all of these hold:
 
@@ -119,10 +206,16 @@ The sign counter is not used. Synced passkeys always report 0.
 `from_sequence` is set to the receiver's head plus one when the passkey is set
 up. History from before the passkey still verifies under the new trust.
 
-Once a receiver, witness or verifier state has installed a trust with a
-passkey, every later trust must carry the identical `owner_passkey`. Removing
-or replacing it is refused, even with a valid root signature. The Go archive
-verifier applies the same rule across the trusts in an archive.
+Once a receiver or witness state has installed a trust with a passkey, every
+later trust must carry the identical passkeys. Removing or replacing one is
+refused, even with a valid root signature. The one exception is the
+administrator's replacement (above). The owner's own verifier follows a
+replacement: it accepts a root-signed trust that keeps the passkeys it
+pinned and adds later ones, but only a passkey whose start is after the
+receipts that it has already verified. The Go archive verifier applies the
+same rule across the trusts in an archive. So in both, each added passkey
+still needs its `passkey` receipt. The owner's gate also follows; it
+verifies no history and is not trusted.
 
 ## Honest limits
 
@@ -139,9 +232,9 @@ verifier applies the same rule across the trusts in an archive.
 - The sign counter is not used, so a cloned authenticator is not detected.
 - `rp_id` is `localhost`. The passkey works only with this machine's owner
   app, at the registered port.
-- Replacing a lost passkey is not supported yet. It needs a reviewed handover
-  procedure. Until then, a home whose passkey is lost cannot approve new
-  changes.
+- A lost passkey is replaced through the administrator ("Replace a lost
+  passkey", above). Without separate role accounts there is no replacement:
+  such a home cannot approve new changes after the loss.
 - The receiver, witness and root key still run under the owner's account on
   a single-host setup. A process with that account can change their state
   directly. The passkey protects the approval itself; the roles need separate

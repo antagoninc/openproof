@@ -41,6 +41,7 @@ Not protected:
 | Receiver service (`openproof-role serve`) | The receiver's account | Receiver key, documents, used nonces, the pinned trust | G1; the receipts for G2 |
 | Witness service (`openproof-role serve`) | The witness's account | Witness key, the ordered history | G2 |
 | Status check (`roles_status.py`) | The owner or the administrator, from a root-owned copy | Nothing | The report that G1's condition holds |
+| Passkey replacement tool (`roles_passkey.py`) | The administrator, from a root-owned copy | Nothing | That the passkey it installs is the one whose code the administrator typed |
 | Go verifier | The party that verifies | The trusted root, a checkpoint, the current time | G3 |
 | Cosigning witnesses (optional) | Other operators | Their own keys | That one history exists for each tree size ([WITNESS-NETWORK.md](WITNESS-NETWORK.md)) |
 | Administrator, root | — | Everything | Fully trusted. See "Out of scope" |
@@ -89,10 +90,13 @@ Attacker A sends requests on the receiver's Unix socket.
 | The document must be at the expected version | `apply_inner` |
 | The change, the receipt and the used nonce are one database transaction | `apply_inner` |
 | The trust that the service admits under is installed only with the root's signature. A later trust cannot have a lower epoch, cannot remove or replace the passkey, and cannot change the role keys. The signing clock does not go back | `roles.rs`: `role_install`; `pin`; `pin_owner_passkey`; `clock.rs` |
+| The passkey is replaced only on a request from user ID 0. The new trust must keep the pinned passkeys and add one, and the receiver writes a `passkey` receipt in the same transaction | `openproof-role`: `replace-passkey`; `passkey.rs`: `replace_owner_passkey` |
 
 What attacker A can still do here: read the root key in the owner home and
 install a trust with another authority key. The receiver still requires the
-passkey assertion, so no change is admitted. A can also stop all work.
+passkey assertion, so no change is admitted. A can also sign a trust that
+replaces the passkey; the role services refuse it from A's account. A can
+also stop all work.
 
 Without a passkey, A reads the authority key and signs approvals. Without
 separate role accounts, A changes the receiver's state directly. G1's
@@ -178,7 +182,30 @@ owner's account can change what the owner's own terminal shows. For a check
 that does not depend on that account, the administrator runs the status check
 with `sudo`.
 
-### 7. The receiver to protected files
+### 7. The owner's account to the administrator
+
+A lost passkey is replaced through the administrator
+([PASSKEY.md](PASSKEY.md)). The administrator runs a root-owned tool on a
+replacement that was prepared in the owner's home. Attacker A can put its own
+prepared replacement there, and can change every file and every screen text
+of the owner's account.
+
+| Control | Where |
+|---|---|
+| The tool asks for the code that the set-up page shows, and continues only when it is the code of the passkey in the prepared file: 80 bits of a SHA-256 over the public key, the relying party and the origin | `scripts/roles_passkey.py`: `code`, `replace` |
+| The set-up page computes the code itself, from the key that the authenticator returned to it and from its own address | `app/common.js`: `passkeyCode`; `app/setup.js` |
+| The command that the page shows for the administrator is fixed text of the page. The tool takes the owner home from the root-owned install record | `app/setup.html`; `roles_passkey.py`: `replace` |
+| The tool reads the prepared file without following a link and only when it is a regular file, runs only as root, and sends the request only to a process that runs under the role account | `roles_passkey.py`: `prepared`; `roles_status.py`: `ask` |
+| The verifiers accept a later passkey only right after the receiver's `passkey` receipt with its hash, and check each approval against the passkey in force at its receipt | `passkey.rs`: `replacement_receipt`, `check_owner_assertion`; Go: `replacementReceipt`, `ownerAssertion`, `samePasskey` |
+| The owner's verifier follows the receiver only for a passkey that starts after the receipts it has verified | `verifier.rs`: `follow_owner_passkey` |
+
+Limits: the tool cannot see who typed the code or where it came from. A that
+controls the browser when the new passkey is made can show a wrong code. An
+administrator who runs a program that A named, or who types a code that A
+supplied, is deceived: run only the root-owned tool, and take the code only
+from the owner's page, for a replacement that the owner started.
+
+### 8. The receiver to protected files
 
 | Control | Where |
 |---|---|
@@ -190,7 +217,7 @@ Limits are in [PROTECTED-FILES.md](PROTECTED-FILES.md): a new version can be
 late, every local account can read the files, and a program must read a file
 by a path that the agent cannot change.
 
-### 8. The submitter to other witnesses
+### 9. The submitter to other witnesses
 
 The submitter carries tree heads and proofs to the witnesses that the owner
 lists. No receipt, approval or document leaves the computer. Each cosignature
@@ -200,8 +227,9 @@ not trusted.
 ## Out of scope
 
 - **The administrator and root.** Root can read and change every account's
-  files. An owner's account with administrator rights is the same as root:
-  use a standard account as the owner.
+  files, and can replace the owner passkey. An owner's account with
+  administrator rights is the same as root: use a standard account as the
+  owner.
 - **Physical access, the operating system, the browser, the authenticator
   and the hardware.**
 - **The owner confirms a prompt for content that they did not mean to
@@ -213,8 +241,8 @@ not trusted.
 - **The moment of passkey set-up.** An attacker in the owner's account at
   that moment can install a key that they hold. Set up the passkey on a
   computer that you trust at that time.
-- **A lost passkey.** It cannot be replaced yet. The home then approves no
-  new change.
+- **A lost passkey without separate role accounts.** There is then no
+  administrator to ask, and the home approves no new change.
 - **Dependencies and build tools.** The Rust and Go dependencies are locked.
   Validation checks the Rust dependencies against the RustSec advisory
   database and against a list of accepted licenses. That finds known
@@ -236,12 +264,13 @@ shows that one case behaves as written. It does not show that no defect exists.
   each role's operations, tampering, replay, trust updates, protected files.
 - `scripts/tests/test_local_roles.py` (as root, on Linux): install, the
   workflow through the services, a separation probe from the owner's account
-  and from a third account, and install states that a defective installer
-  could leave.
+  and from a third account, install states that a defective installer
+  could leave, and the passkey replacement with its refusals.
 - `scripts/tests/test_review_page.py`: the review page's approval check, with
   its digest matched to the Rust one and every single difference refused.
 - `scripts/passkey_smoke.mjs`: the full passkey workflow in a real browser
-  with a virtual authenticator, with the server's answers changed in flight.
+  with a virtual authenticator, with the server's answers changed in flight;
+  as root, also a passkey replacement through the set-up page.
 - `scripts/witness_conformance.py`: the same cases through the Rust and the
   Go implementations, passkey cases included.
 - `reference/go-witness`: the Go verifier's own tests, with the ways that a
@@ -257,8 +286,8 @@ protected files ([LOCAL-ROLES.md](LOCAL-ROLES.md),
 
 1. An independent witness, so that G2's condition can be met.
 2. A human security review of the trusted code.
-3. Replacement of a lost passkey.
-4. A signed release, and a build reproduced by another party.
+3. A signed release, and a build reproduced by another party.
+4. A run of the passkey replacement on a Mac.
 
 Change this file in the same change that moves a boundary or adds trusted
 code.

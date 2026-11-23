@@ -186,16 +186,16 @@ mod service {
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
             // Any other account is closed on before a byte is read or sent.
-            if !peer_uid(&stream).is_ok_and(|u| clients.contains(&u)) {
+            let Some(peer) = peer_uid(&stream).ok().filter(|u| clients.contains(u)) else {
                 continue;
-            }
+            };
             if open.load(SeqCst) >= 32 {
                 continue;
             }
             open.fetch_add(1, SeqCst);
             let (s, open) = (s.clone(), open.clone());
             std::thread::spawn(move || {
-                let _ = connection(&s, stream);
+                let _ = connection(&s, stream, peer);
                 open.fetch_sub(1, SeqCst);
             });
         }
@@ -217,7 +217,7 @@ mod service {
         Ok(listener)
     }
 
-    fn connection(s: &Mutex<Role>, mut stream: UnixStream) -> Result<()> {
+    fn connection(s: &Mutex<Role>, mut stream: UnixStream, peer: u32) -> Result<()> {
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
         // One message: `{"op": NAME, "body": {...}}`. A message that cannot
@@ -227,7 +227,7 @@ mod service {
         let reply: Reply = (|| {
             let v = strict_json(&raw).map_err(|_| bad())?;
             let m = fields(&v, &["op", "body"], &[]).map_err(|_| bad())?;
-            s.dispatch(text(m, "op").map_err(|_| bad())?, &m["body"])
+            s.dispatch(text(m, "op").map_err(|_| bad())?, &m["body"], peer)
         })();
         drop(s);
         let (code, body) = match reply {
@@ -245,7 +245,7 @@ mod service {
             keys::trust(&self.trust).map_err(|_| unconfirmed())
         }
 
-        fn dispatch(&self, op: &str, v: &Value) -> Reply {
+        fn dispatch(&self, op: &str, v: &Value, peer: u32) -> Reply {
             let st = &self.state;
             let shape = |required: &[&str]| fields(v, required, &[]).map_err(|_| bad());
             let number =
@@ -271,9 +271,28 @@ mod service {
                                "published": published})
                     }))
                 }
+                // The root-signed trust that this role admits under. The owner's
+                // side and the administrator's tool follow the receiver's.
+                ("signed-trust", _) => {
+                    shape(&[])?;
+                    done(keys::read(&self.signed_trust).and_then(|b| strict_json(&b)))
+                }
                 ("install-trust", _) => {
                     let m = shape(&["signed"])?;
                     self.install_trust(&m["signed"])
+                }
+                // Only the administrator replaces the owner passkey: a root
+                // signature is not enough, because the root key is a file of
+                // the owner (docs/PASSKEY.md).
+                ("replace-passkey", _) => {
+                    let m = shape(&["signed"])?;
+                    if peer != 0 {
+                        return Err((
+                            403,
+                            json!({"error": "Only the administrator replaces the owner passkey"}),
+                        ));
+                    }
+                    self.replace_passkey(&m["signed"])
                 }
                 ("document", true) => {
                     let m = shape(&["document"])?;
@@ -392,11 +411,37 @@ mod service {
                 return Err((400, json!({"error": "Role key change refused"})));
             }
             role_install(&self.state, &s, &root, now()).map_err(|_| bad())?;
-            for (path, data) in [(&self.signed_trust, signed), (&self.trust, &new)] {
+            self.store_trust(signed, &new)?;
+            Ok(json!({"installed_epoch": new["epoch"]}))
+        }
+
+        /// The trust files that the service reads, after the state took the trust.
+        fn store_trust(
+            &self,
+            signed: &Value,
+            new: &Value,
+        ) -> std::result::Result<(), (u16, Value)> {
+            for (path, data) in [(&self.signed_trust, signed), (&self.trust, new)] {
                 files::replace(path, &serde_json::to_vec(data).map_err(|_| unconfirmed())?)
                     .map_err(|_| unconfirmed())?;
             }
-            Ok(json!({"installed_epoch": new["epoch"]}))
+            Ok(())
+        }
+
+        /// Replace the owner passkey with the one in a root-signed trust that
+        /// retires the pinned one. The receiver also writes the `passkey` receipt.
+        fn replace_passkey(&self, signed: &Value) -> Reply {
+            let root = role_root(&self.state)
+                .ok()
+                .flatten()
+                .ok_or_else(unconfirmed)?;
+            let s: Signed<Trust> = parse(signed).map_err(|_| bad())?;
+            let new = serde_json::to_value(&s.payload).map_err(|_| unconfirmed())?;
+            let key = self.receiver.then_some(&self.key);
+            let receipt =
+                replace_owner_passkey(&self.state, &s, &root, key, now()).map_err(|_| bad())?;
+            self.store_trust(signed, &new)?;
+            Ok(json!({"installed_epoch": new["epoch"], "receipt": receipt}))
         }
     }
 }

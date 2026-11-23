@@ -24,6 +24,7 @@ TOOL_COMMANDS = {
     "install",
     "revoke",
     "gap",
+    "replace-passkey",
     "role-init",
     "sign-trust-untracked",
     "trust-floor",
@@ -236,6 +237,19 @@ def renew(home):
 def enroll_passkey(home, passkey):
     """A new root-signed trust epoch that requires the owner's passkey."""
     return call(["enroll-passkey", Path(home).resolve()], passkey)
+
+
+def replace_passkey(home, passkey):
+    """Tests: replace the owner passkey of a home without role services. With
+    role services only the administrator does this (docs/PASSKEY.md)."""
+    home = Path(home).resolve()
+    call(["prepare-passkey-replacement", home], passkey)
+    signed = ref.read(home / "passkey-replacement.json")["signed"]
+    root = ref.read(home / "root-public.json")["public_key"]
+    receiver = home / "receiver"
+    call(["replace-passkey", receiver / "state", root, receiver / "key.secret"], signed)
+    call(["replace-passkey", home / "witness/state", root], signed)
+    return call(["finish-passkey-replacement", home])
 
 
 def authenticated_trust(home):

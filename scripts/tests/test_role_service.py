@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from witness_workflow import Broker, initialize, call, ref
+from witness_workflow import Broker, initialize, call, ref, enroll_passkey
 
 ROLE = ROOT / "target/debug/openproof-role"
 
@@ -419,6 +419,110 @@ class RoleServiceTests(unittest.TestCase):
         (self.h / "service-client.json").write_text(json.dumps(old))
         with self.assertRaisesRegex(RuntimeError, "Reinstall"):
             call(["head", self.h / "receiver/state"])
+
+    def test_only_the_administrator_replaces_the_owner_passkey(self):
+        """`replace-passkey` is taken only from user ID 0 (docs/PASSKEY.md). As
+        root, this test also sends it from another account; as another
+        account, it checks the refusal only."""
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import serialization
+
+        def passkey():
+            point = (
+                ec.generate_private_key(ec.SECP256R1())
+                .public_key()
+                .public_bytes(
+                    serialization.Encoding.X962,
+                    serialization.PublicFormat.UncompressedPoint,
+                )
+            )
+            return dict(
+                public_key=point.hex(),
+                rp_id="localhost",
+                origin="http://localhost:8765",
+            )
+
+        old, new = passkey(), passkey()
+        enroll_passkey(self.h, old)
+        call(["prepare-passkey-replacement", self.h], new)
+        signed = ref.read(self.h / "passkey-replacement.json")["signed"]
+        administrator = os.getuid() == 0
+        other = 65534 if administrator else os.getuid()
+        os.chmod(self.s, 0o755)
+        s = self.services = Services(self.d, self.s, self.h, uids=[os.getuid(), other])
+
+        def from_other(role, value):
+            """The request from an account that is not the administrator."""
+            if not administrator:
+                return s.request(role, "/v1/replace-passkey", value)
+            client = (
+                "import json,socket,sys\n"
+                "raw=json.dumps({'op':'replace-passkey','body':json.loads(sys.argv[2])}).encode()\n"
+                "s=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1])\n"
+                "s.sendall(len(raw).to_bytes(4,'big')+raw);s.shutdown(socket.SHUT_WR)\n"
+                "r=b''\n"
+                "while (c:=s.recv(65536)): r+=c\n"
+                "a=json.loads(r[4:]);print(json.dumps([a['code'],a['body']]))\n"
+            )
+            r = subprocess.run(
+                [sys.executable, "-c", client, str(s.sockets[role]), json.dumps(value)],
+                capture_output=True,
+                user=other,
+                group=other,
+                check=True,
+            )
+            return tuple(json.loads(r.stdout))
+
+        def required(role):
+            code, status = s.request(role, "/v1/status", {})
+            self.assertEqual(code, 200)
+            return status["owner_passkey"]["public_key"]
+
+        refusal = (403, {"error": "Only the administrator replaces the owner passkey"})
+        for role in ("receiver", "witness"):
+            self.assertEqual(from_other(role, {"signed": signed}), refusal)
+            self.assertEqual(required(role), old["public_key"])
+            # A root signature alone does not replace the passkey either.
+            code, _ = s.request(role, "/v1/install-trust", {"signed": signed})
+            self.assertEqual(code, 400)
+            self.assertEqual(required(role), old["public_key"])
+        self.assertEqual(call(["head", self.h / "receiver/state"])["count"], 0)
+        if not administrator:
+            return
+        code, _ = s.request("receiver", "/v1/replace-passkey", {})
+        self.assertEqual(code, 400)
+        code, body = s.request("receiver", "/v1/replace-passkey", {"signed": signed})
+        self.assertEqual(code, 200, body)
+        receipt = body["receipt"]
+        self.assertEqual(
+            (receipt["payload"]["kind"], receipt["payload"]["sequence"]), ("passkey", 1)
+        )
+        self.assertEqual(required("receiver"), new["public_key"])
+        code, body = s.request("witness", "/v1/replace-passkey", {"signed": signed})
+        self.assertEqual((code, body["receipt"]), (200, None), body)
+        self.assertEqual(required("witness"), new["public_key"])
+        code, checkpoint = s.request("witness", "/v1/witness", {"receipt": receipt})
+        self.assertEqual((code, checkpoint["payload"]["count"]), (200, 1))
+        # The same replacement a second time is refused, and so is the way back.
+        code, _ = s.request("receiver", "/v1/replace-passkey", {"signed": signed})
+        self.assertEqual(code, 400)
+        back = ref.read(self.h / "trust-signed.json")
+        for path in ("/v1/install-trust", "/v1/replace-passkey"):
+            code, _ = s.request("receiver", path, {"signed": back})
+            self.assertEqual(code, 400)
+        self.assertEqual(required("receiver"), new["public_key"])
+        # Both services give their signed trust, to the owner's account too.
+        for role in ("receiver", "witness"):
+            self.assertEqual(from_other(role, {"signed": signed}), refusal)
+            code, theirs = s.request(role, "/v1/signed-trust", {})
+            self.assertEqual((code, theirs), (200, signed))
+        # The owner's side follows: its verifier and its trust files.
+        done = call(["finish-passkey-replacement", self.h])
+        self.assertEqual(done["status"], "replaced", done)
+        self.assertEqual(
+            ref.read(self.h / "trust.json")["owner_passkey"]["public_key"],
+            new["public_key"],
+        )
 
     def test_trust_updates_are_opt_in_and_keep_role_keys(self):
         def signed(change, step):

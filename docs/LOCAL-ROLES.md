@@ -51,8 +51,10 @@ replace a pinned owner passkey, and the service refuses a change of role keys.
    account with `su ADMIN -c 'sudo …'` and full paths.
 
    The install:
-   - copies the `openproof-role` binary and the status check
-     (`roles_status.py`) to `/private/var/db/openproof/libexec/` as root;
+   - copies the `openproof-role` binary, the status check
+     (`roles_status.py`) and the passkey replacement tool
+     (`roles_passkey.py`, [PASSKEY.md](PASSKEY.md)) to
+     `/private/var/db/openproof/libexec/` as root;
    - creates the hidden accounts `_openproofrcv` and `_openproofwit`;
    - copies the role keys and state, and starts two launchd daemons
      (`com.antagon.openproof.receiver`, `.witness`) whose sockets are
@@ -103,8 +105,8 @@ a file of root under folders of root, it stops with an error.
 `"separated": true` means all of this ([TCB.md](TCB.md) has the reasons and
 the limits):
 
-- the role binary and the status check are files of root that no other
-  account can write (`code_protected`). `code_sha256` is the SHA-256 of the
+- the role binary, the status check and the passkey replacement tool are
+  files of root that no other account can write (`code_protected`). `code_sha256` is the SHA-256 of the
   installed role binary. Compare it with a binary from a build that you
   trust, for example one that you built before an agent ran in your account;
 - the two role accounts are separate accounts without a login shell
@@ -131,6 +133,18 @@ owner app shows. G1 holds when both values are true ([TCB.md](TCB.md)).
 With `--publish`, the answer also has a `"protected_files"` part
 ([PROTECTED-FILES.md](PROTECTED-FILES.md)).
 
+## Replace the owner passkey
+
+Only the administrator can replace the owner passkey, with the root-owned
+tool `roles_passkey.py`. [PASSKEY.md](PASSKEY.md) has the steps. The role
+services take the replacement only from user ID 0. Each service gives the
+root-signed trust that it admits under to the owner's account and to root
+(`signed-trust`), so that the owner's side and the tool can follow the
+receiver.
+
+An install from before 23 Nov 2026 (install record version 4 or earlier)
+does not have the tool or the operation: run `uninstall`, then `install`.
+
 ## Uninstall
 
 ```
@@ -150,9 +164,17 @@ and uninstall with real accounts, and the same for protected files with a
 failed install. It runs only as root on Linux with
 `OPENPROOF_ROLE_ACCOUNT_TEST=1`. `scripts/tests/test_role_service.py` checks the
 role service itself on every run: the peer check, the message form, each
-role's operations, tampering, replay, opt-in trust updates and protected
-files. The root test also puts the install into states that a defective
+role's operations, tampering, replay, opt-in trust updates, the refusal of a
+passkey replacement from another account and, as root, the replacement, and
+protected files. The root test also puts the install into states that a defective
 installer could leave, and checks that the status check reports each one.
+
+The root test also runs the passkey replacement with real accounts: the
+owner's account is refused by the tool and by the service; a wrong code, a
+prepared replacement with another key and one for another address change
+nothing; the administrator's replacement is a receipt in the history; and a
+replacement that stopped in the middle, lost its prepared file or outlived
+its trust is completed. The replacement was not yet run on a Mac.
 
 On a Mac (launchd, 10 Nov 2026), these were checked by hand: `uninstall` of a
 version 3 install, `install --publish` of version 4, and the status check as

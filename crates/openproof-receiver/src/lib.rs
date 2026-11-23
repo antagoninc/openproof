@@ -75,6 +75,10 @@ pub struct Trust {
     /// bytes and signatures are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_passkey: Option<OwnerPasskey>,
+    /// The owner passkeys that were replaced, oldest first. Absent unless the
+    /// administrator replaced a passkey (docs/PASSKEY.md).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_owner_passkeys: Vec<OwnerPasskey>,
 }
 impl Trust {
     pub fn validate(&self, time: u64) -> Result<()> {
@@ -107,9 +111,7 @@ impl Trust {
         for k in [&self.authority, &self.receiver, &self.witness] {
             openproof_core::public_key(k)?;
         }
-        if let Some(k) = &self.owner_passkey {
-            k.validate()?;
-        }
+        passkey::validate_owner_passkeys(self)?;
         check(
             self.authority != self.receiver
                 && self.authority != self.witness
@@ -184,8 +186,15 @@ impl Evidence for Receipt {
             && !self.reason.is_empty()
             && self.approval_sha256 == ZERO
             && self.content_sha256 == ZERO;
+        // The administrator replaced the owner passkey: the hash of the new one.
+        let passkey = self.kind == "passkey"
+            && self.document.is_empty()
+            && self.document_version == 0
+            && self.reason.is_empty()
+            && self.approval_sha256 == ZERO
+            && self.content_sha256 != ZERO;
         if self.version != V
-            || !(update || gap)
+            || !(update || gap || passkey)
             || self.reason.len() > 512
             || self.sequence == 0
             || !valid_hash(&self.previous)

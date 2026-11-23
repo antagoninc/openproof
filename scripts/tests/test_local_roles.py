@@ -426,6 +426,199 @@ class LocalRolesTests(unittest.TestCase):
             rs.LAUNCHD, rs.SYSTEMD = saved
             shutil.rmtree(folder)
 
+    def test_only_the_administrator_replaces_the_owner_passkey(self):
+        """docs/PASSKEY.md, "Replace a lost passkey": the owner's account
+        cannot do it; a wrong code, another key or another address changes
+        nothing; the administrator's replacement is a receipt; and an
+        interrupted or stale replacement repairs itself."""
+        import time
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import serialization
+        from witness_workflow import call, enroll_passkey, ref, renew
+        from roles_passkey import code
+
+        def passkey(origin="http://localhost:8765"):
+            point = (
+                ec.generate_private_key(ec.SECP256R1())
+                .public_key()
+                .public_bytes(
+                    serialization.Encoding.X962,
+                    serialization.PublicFormat.UncompressedPoint,
+                )
+            )
+            return dict(public_key=point.hex(), rp_id="localhost", origin=origin)
+
+        old, new, attacker = passkey(), passkey(), passkey()
+        enroll_passkey(self.h, old)
+        _chown(self.h, self.owner)
+        self.local_roles("install")
+        self.assertTrue(self.status()["passkey_required_by_receiver"])
+        tool = BASE / "libexec/roles_passkey.py"
+        self.assertEqual(os.lstat(tool).st_uid, 0)
+        waiting = self.h / "passkey-replacement.json"
+
+        def replace(typed, user=None):
+            return subprocess.run(
+                ["/usr/bin/python3", "-I", tool, "--base", BASE],
+                input=typed + "\n",
+                capture_output=True,
+                text=True,
+                user=user,
+                timeout=60,
+            )
+
+        def required(role="receiver"):
+            status = call(["role-status", self.h / role / "state"])
+            return status["owner_passkey"]["public_key"]
+
+        def heads():
+            return [
+                call(["head", self.h / role / "state"])["count"]
+                for role in ("receiver", "witness")
+            ]
+
+        def unchanged(r, message, key=old):
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            self.assertIn(message, r.stderr)
+            self.assertEqual(required(), key["public_key"])
+            self.assertEqual(heads()[0], 1 if key is old else 2)
+
+        def prepare(key):
+            call(["prepare-passkey-replacement", self.h], key)
+            _chown(self.h, self.owner)
+            return ref.read(waiting)["signed"]
+
+        def as_owner(op, value):
+            """A request to the receiver service from the owner's account."""
+            client = (
+                "import json,socket,sys\n"
+                "raw=json.dumps({'op':sys.argv[2],'body':json.loads(sys.argv[3])}).encode()\n"
+                "s=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1])\n"
+                "s.sendall(len(raw).to_bytes(4,'big')+raw);s.shutdown(socket.SHUT_WR)\n"
+                "r=b''\n"
+                "while (c:=s.recv(65536)): r+=c\n"
+                "print(json.loads(r[4:])['code'])\n"
+            )
+            r = subprocess.run(
+                [sys.executable, "-c", client, SOCKET, op, json.dumps(value)],
+                capture_output=True,
+                text=True,
+                user=OWNER,
+            )
+            return r.stdout.strip()
+
+        # Nothing is prepared yet: the tool changes nothing and says so.
+        r = replace(code(new))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("No replacement is waiting", r.stdout)
+        # Not a regular file: the tool does not wait on it.
+        os.mkfifo(waiting)
+        r = replace(code(new))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        waiting.unlink()
+        signed = prepare(new)
+        # The owner's account: the tool refuses, and so does the service itself.
+        unchanged(replace(code(new), user=OWNER), "administrator")
+        self.assertEqual(as_owner("replace-passkey", {"signed": signed}), "403")
+        self.assertEqual(required(), old["public_key"])
+        # A wrong code changes nothing.
+        unchanged(replace("0000-0000-0000-0000-0000"), "not the code")
+        # A program in the owner's account prepares its own key, or the owner's
+        # new key for another address. The page still shows the code of the
+        # owner's new passkey at the owner app's address, so the tool refuses.
+        prepare(attacker)
+        unchanged(replace(code(new)), "not the code")
+        prepare(dict(new, origin="http://localhost:4444"))
+        unchanged(replace(code(new)), "not the code")
+        # The owner prepares it again, and the administrator types the code,
+        # here in lower case and without the dashes.
+        prepare(new)
+        r = replace(code(new).replace("-", "").lower())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        report = json.loads(r.stdout[r.stdout.index("{") :])
+        self.assertEqual((report["replaced"], report["receipt_sequence"]), (True, 2))
+        self.assertEqual([required(), required("witness")], [new["public_key"]] * 2)
+        self.assertEqual(heads(), [2, 2])
+        receipt = call(["receipt", self.h / "receiver/state", 2])
+        self.assertEqual(receipt["payload"]["kind"], "passkey")
+        # A second run finds nothing to do.
+        r = replace(code(new))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(heads(), [2, 2])
+        # The owner makes another passkey before the owner's side followed. The
+        # first replacement is not lost: the owner's side takes it from the
+        # receiver, and a renewed trust keeps it.
+        third = passkey()
+        prepare(third)
+        trust = ref.read(self.h / "trust.json")
+        self.assertEqual(trust["owner_passkey"]["public_key"], new["public_key"])
+        self.assertEqual(
+            trust["retired_owner_passkeys"][0]["public_key"], old["public_key"]
+        )
+        self.assertEqual(
+            call(["finish-passkey-replacement", self.h])["status"], "waiting"
+        )
+        renew(self.h)
+        self.assertEqual(required(), new["public_key"])
+        # The renewed trust ended the prepared replacement.
+        unchanged(replace(code(third)), "refused the prepared replacement", key=new)
+        # The tool stops after the receiver: the witness is behind. The next run
+        # brings the witness into step, without a code.
+        signed = prepare(third)
+        self.assertEqual(as_owner("signed-trust", {}), "200")
+        from roles_status import ask
+
+        ask(SOCKET, "replace-passkey", body={"signed": signed})
+        self.assertEqual(
+            [required(), required("witness")],
+            [third["public_key"], new["public_key"]],
+        )
+        # While the witness is behind, the owner's side says what to do.
+        with self.assertRaises(RuntimeError) as failed:
+            call(["finish-passkey-replacement", self.h])
+        self.assertIn("roles_passkey.py", str(failed.exception))
+        r = replace("")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(required("witness"), third["public_key"])
+        self.assertEqual(heads(), [3, 3])
+        # The prepared file is lost, and the trust that the roles took ends
+        # before the owner's side follows. It follows all the same.
+        waiting.unlink()
+        fourth = passkey()
+        signed = prepare(fourth)
+        short = dict(signed["payload"], expires_at=int(time.time()) + 3)
+        short["epoch"] += 1
+        signed = call(
+            ["sign-trust", self.h / "root/key.secret", self.h / "root/signer"], short
+        )
+        waiting.unlink()
+        waiting.write_text(json.dumps({"signed": signed}))
+        # The receiver service stops after its state took the replacement and
+        # before it stored its trust files: here, the old files are put back.
+        files = [BASE / "receiver" / n for n in ("trust.json", "trust-signed.json")]
+        before = [f.read_bytes() for f in files]
+        ask(SOCKET, "replace-passkey", body={"signed": signed})
+        for f, content in zip(files, before):
+            f.write_bytes(content)
+        self.assertEqual(required(), third["public_key"])
+        r = replace(code(fourth))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(json.loads(r.stdout[r.stdout.index("{") :])["replaced"])
+        self.assertEqual([required(), required("witness")], [fourth["public_key"]] * 2)
+        waiting.unlink()
+        time.sleep(5)
+        done = call(["finish-passkey-replacement", self.h])
+        self.assertEqual(done["status"], "none", done)
+        trust = ref.read(self.h / "trust.json")
+        self.assertEqual(trust["owner_passkey"]["public_key"], fourth["public_key"])
+        self.assertEqual(len(trust["retired_owner_passkeys"]), 3)
+        renew(self.h)
+        self.assertEqual([required(), required("witness")], [fourth["public_key"]] * 2)
+        self.assertEqual(heads(), [4, 4])
+        status = self.status()
+        self.assertTrue(status["separated"], status)
+        self.assertTrue(status["passkey_required_by_receiver"], status)
+
     def test_install_separates_roles_and_uninstall_restores(self):
         from witness_workflow import call, renew
 

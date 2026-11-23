@@ -6,6 +6,7 @@
 // a defect on the server side could, and checks that the review page refuses
 // before any passkey prompt (app/approval.js).
 import fs from "node:fs";
+import os from "node:os";
 import net from "node:net";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -19,6 +20,7 @@ const root = path.resolve(import.meta.dirname, "..");
 const python = process.env.OPENPROOF_PYTHON || path.join(root, "outputs/local-venv/bin/python");
 const witnessBinary = path.join(root, "target/debug/openproof-witness");
 const toolBinary = path.join(root, "target/debug/openproof-tool");
+const roleBinary = path.join(root, "target/debug/openproof-role");
 const home = path.join(out, "home");
 const sha256 = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
@@ -120,8 +122,18 @@ try {
     trust.owner_passkey.from_sequence !== 1
   )
     throw Error("Trust does not carry the registered passkey");
-  if (!(await evaluate("document.getElementById('passkey-setup').hidden")))
-    throw Error("Passkey setup still offered after registration");
+  if ((await evaluate("document.getElementById('passkey-setup').textContent")) !== "Replace passkey")
+    throw Error("After registration the workspace must offer only the replacement");
+  // Without separate role accounts the set-up page offers no replacement.
+  await go(reviewOrigin + "/setup", () => evaluate("document.getElementById('again')?.hidden === false"));
+  if (
+    !(await evaluate("document.getElementById('first').hidden")) ||
+    !(await evaluate("document.getElementById('replace').disabled")) ||
+    (await evaluate("document.getElementById('no-roles').hidden"))
+  )
+    throw Error("Replacement offered without role accounts");
+  if (await api("passkey/replace/begin", {}).then(() => true, () => false))
+    throw Error("Replacement started without role accounts");
 
   // Record what the review page shows when the passkey is asked, and how often.
   const watchPrompt = () =>
@@ -320,6 +332,142 @@ try {
   const final = await api("recovery");
   if (final.heads.receiver !== 2 || final.heads.witness !== 2) throw Error("Unexpected history length");
   await b.screenshot(path.join(out, "app.png"));
+
+  // 9. Replace the passkey (docs/PASSKEY.md). The receiver and the witness take a
+  // replacement only from user ID 0, so this part runs only as root. The role
+  // services run on this home's states, as separate role accounts run them.
+  let replacement = "not run: needs user ID 0";
+  const services = (globalThis.openproofServices = []);
+  if (process.getuid?.() === 0) {
+    const sockets = fs.mkdtempSync(path.join(os.tmpdir(), "opsock-"));
+    for (const role of ["receiver", "witness"]) {
+      const dir = path.join(out, "service-" + role);
+      fs.mkdirSync(dir);
+      for (const name of ["trust.json", "trust-signed.json"])
+        fs.copyFileSync(path.join(home, name), path.join(dir, name));
+      const socket = path.join(sockets, role + ".sock");
+      const process_ = spawn(
+        roleBinary,
+        [
+          "serve", "--role", role, "--state", path.join(home, role, "state"),
+          "--key", path.join(home, role, "key.secret"), "--trust", path.join(dir, "trust.json"),
+          "--signed-trust", path.join(dir, "trust-signed.json"), "--socket", socket,
+          "--client-uid", "0", "--accept-trust-updates",
+        ],
+        { stdio: "ignore" },
+      );
+      services.push({ role, socket, process: process_ });
+    }
+    await until(() => services.every((s) => fs.existsSync(s.socket)), "role services");
+    const [receiver, witness] = services;
+    fs.writeFileSync(
+      path.join(home, "service-client.json"),
+      JSON.stringify({
+        version: "openproof-service-client/3",
+        receiver: { socket: receiver.socket },
+        witness: { socket: witness.socket },
+      }),
+    );
+    // One request to a role service: a 4-byte length and JSON, each way.
+    const ask = (socket, op, body) =>
+      new Promise((resolve, reject) => {
+        const raw = Buffer.from(JSON.stringify({ op, body }));
+        const length = Buffer.alloc(4);
+        length.writeUInt32BE(raw.length);
+        const chunks = [];
+        const s = net.connect(socket, () => s.end(Buffer.concat([length, raw])));
+        s.on("data", (c) => chunks.push(c));
+        s.on("error", reject);
+        s.on("end", () => {
+          const answer = JSON.parse(Buffer.concat(chunks).subarray(4));
+          answer.code === 200 ? resolve(answer.body) : reject(Error(op + ": " + JSON.stringify(answer)));
+        });
+      });
+
+    await workspace(workspaceOrigin + "/");
+    await evaluate("document.getElementById('passkey-setup').click()");
+    await until(() => evaluate("location.pathname==='/setup' && document.getElementById('replace')?.disabled === false"), "replace page");
+    await evaluate("document.getElementById('replace').click()");
+    await until(() => evaluate("document.getElementById('confirm').hidden === false"), "new passkey");
+    if ((await send("WebAuthn.getCredentials", { authenticatorId })).credentials.length !== 2)
+      throw Error("Expected a second passkey");
+    // The page's code is the code of the key in the prepared replacement, computed
+    // as the administrator's tool does (scripts/roles_passkey.py).
+    const prepared = readJson(path.join(home, "passkey-replacement.json"));
+    const next = prepared.signed.payload.owner_passkey;
+    const expected = sha256([next.public_key, next.rp_id, next.origin].join("\n")).slice(0, 20).toUpperCase().match(/.{4}/g).join("-");
+    if (next.origin !== reviewOrigin || next.rp_id !== "localhost") throw Error("The prepared passkey is for another address");
+    const shown = await evaluate("document.getElementById('code').textContent");
+    if (shown !== expected) throw Error("The page shows " + shown + ", the prepared passkey has " + expected);
+    await b.screenshot(path.join(out, "replace-code.png"));
+    // The command for the administrator is fixed text of the page. Nothing that
+    // the owner app sends is shown as a command.
+    const commands = await evaluate("[...document.querySelectorAll('#confirm pre')].map((e) => e.textContent)");
+    const fixed = [
+      "sudo /usr/bin/python3 -I /private/var/db/openproof/libexec/roles_passkey.py",
+      "sudo /usr/bin/python3 -I /var/lib/openproof/libexec/roles_passkey.py",
+    ];
+    if (JSON.stringify(commands) !== JSON.stringify(fixed)) throw Error("Unexpected command on the page: " + commands);
+    // Until the administrator acts, nothing has changed.
+    await evaluate("document.getElementById('complete').click()");
+    await until(async () => (await message()).includes("does not have the replacement yet"), "waiting");
+    if (readJson(path.join(home, "trust.json")).owner_passkey.public_key !== trust.owner_passkey.public_key)
+      throw Error("The passkey changed without the administrator");
+    // The administrator's part, as the tool sends it: the receiver, then the
+    // witness with the receiver's own trust.
+    const { receipt } = await ask(receiver.socket, "replace-passkey", { signed: prepared.signed });
+    if (receipt.payload.kind !== "passkey" || receipt.payload.sequence !== 3) throw Error("No replacement receipt");
+    // While the witness is behind the receiver, the page says what to do.
+    await until(() => evaluate("document.getElementById('complete').disabled === false"), "button");
+    await evaluate("document.getElementById('complete').click()");
+    await until(async () => (await message()).includes("run roles_passkey.py again"), "witness behind");
+    await ask(witness.socket, "replace-passkey", { signed: await ask(receiver.socket, "signed-trust", {}) });
+    await ask(witness.socket, "witness", { receipt });
+    await until(() => evaluate("document.getElementById('complete').disabled === false"), "button");
+    await evaluate("document.getElementById('complete').click()");
+    await until(async () => (await evaluate("location.origin")) === workspaceOrigin && (await evaluate("document.body.dataset.state === 'idle'")), "replaced");
+    const after = readJson(path.join(home, "trust.json"));
+    if (
+      after.owner_passkey.public_key !== next.public_key ||
+      after.owner_passkey.from_sequence !== 4 ||
+      after.retired_owner_passkeys?.length !== 1 ||
+      after.retired_owner_passkeys[0].public_key !== trust.owner_passkey.public_key ||
+      fs.existsSync(path.join(home, "passkey-replacement.json"))
+    )
+      throw Error("The owner's trust did not follow the replacement");
+    // An approval with the new passkey, executed through the role services.
+    const newId = await propose("passkey-fixture", 2, "Approved with the new passkey");
+    await openReview(newId);
+    await clickApprove();
+    await until(async () => (await message()).includes("Approved."), "approval with the new passkey");
+    const stored = gate("gate-approved", home, path.join(home, "trust.json"), newId).request;
+    const used = JSON.parse(run(toolBinary, ["check-assertion", path.join(home, "trust.json")], JSON.stringify(stored)));
+    if (!used.owner_assertion_verified) throw Error("The approval does not carry the new passkey's assertion");
+    await execute(newId);
+    const heads = (await api("recovery")).heads;
+    if (heads.receiver !== 4 || heads.witness !== 4) throw Error("Unexpected history after the replacement: " + JSON.stringify(heads));
+    // The exported history, with the replacement in it, verifies offline in Go.
+    const archive2 = await api("archive", {});
+    const archiveDir2 = path.join(home, "exports", archive2.download.split("/").pop());
+    fs.copyFileSync(path.join(archiveDir2, "checkpoint-copy.json"), path.join(out, "pin-replaced.json"));
+    const verified2 = JSON.parse(
+      run(python, [
+        path.join(root, "scripts/verify_history.py"),
+        archiveDir2,
+        "--root",
+        rootKey,
+        "--checkpoint",
+        path.join(out, "pin-replaced.json"),
+        "--go-binary",
+        goVerify,
+        "--out",
+        path.join(out, "verify-replaced"),
+      ]),
+    );
+    if (verified2.status !== "portable_history_verified") throw Error("Offline verification failed after the replacement");
+    await b.screenshot(path.join(out, "replaced.png"));
+    replacement = "replaced through the set-up page and user ID 0; approved and executed with the new passkey";
+  }
   const result = {
     passed: true,
     origin: "http://localhost:" + port,
@@ -334,13 +482,17 @@ try {
     go_archive_verification: verified.status,
     restart_reused_origin: true,
     receiver_head: final.heads.receiver,
+    passkey_replacement: replacement,
     external_model_calls: 0,
   };
   fs.writeFileSync(path.join(out, "result.json"), JSON.stringify(result, null, 2));
   console.log(
-    "Passkey workflow passed: registration, exact review, page-computed challenge, tampering refused, execution, fail-closed without assertion, offline verification, restart.",
+    "Passkey workflow passed: registration, exact review, page-computed challenge, tampering refused, execution, fail-closed without assertion, offline verification, restart. Replacement: " +
+      replacement +
+      ".",
   );
 } finally {
   if (b) b.close();
+  for (const s of globalThis.openproofServices ?? []) s.process.kill();
   app.kill();
 }

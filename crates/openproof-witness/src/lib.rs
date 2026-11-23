@@ -84,7 +84,9 @@ pub fn assess(
             "missing, reordered or invalid event time",
         )?;
         last_time = x.observed_at;
-        if x.kind == "gap" {
+        if replacement_receipt(t, x)? {
+            // The administrator replaced the owner passkey here.
+        } else if x.kind == "gap" {
             gaps = true;
         } else {
             let q = requests

@@ -25,7 +25,7 @@
     <div id="message" class="toast quiet" role="status" aria-live="polite"></div>
 
     <main class="page">
-      <section class="card sheet" aria-labelledby="setup-title">
+      <section id="first" class="card sheet" aria-labelledby="setup-title" hidden>
         <div class="sheet-head">
           <div>
             <span class="kicker">Owner passkey</span>
@@ -46,6 +46,47 @@
           <a class="ghost button-link" data-workspace>Cancel</a>
           <button id="setup" class="primary" type="button" disabled>
             Set up passkey
+          </button>
+        </div>
+      </section>
+
+      <section id="again" class="card sheet" aria-labelledby="replace-title" hidden>
+        <div class="sheet-head">
+          <div>
+            <span class="kicker">Owner passkey</span>
+            <h1 id="replace-title">Replace your passkey</h1>
+          </div>
+        </div>
+        <p class="sub">
+          Use this when the passkey is lost, or to move to another passkey.
+          You make the new passkey here. It takes effect only after the
+          administrator of this computer confirms it with the code below.
+          Your account cannot replace the passkey without the administrator.
+        </p>
+        <p id="no-roles" class="fine" hidden>
+          A passkey can be replaced only when the receiver and the witness
+          run under their own accounts (separate role accounts).
+        </p>
+        <div id="confirm" hidden>
+          <p class="fine">
+            This page computed this code from the passkey that it made. Keep
+            the page open. The administrator runs the command for this
+            computer, exactly as it is here, and types the code. If the
+            command refuses the code, do not continue.
+          </p>
+          <p id="code" class="passkey-code"></p>
+          <p class="fine">macOS</p>
+          <pre class="command">sudo /usr/bin/python3 -I /private/var/db/openproof/libexec/roles_passkey.py</pre>
+          <p class="fine">Linux</p>
+          <pre class="command">sudo /usr/bin/python3 -I /var/lib/openproof/libexec/roles_passkey.py</pre>
+        </div>
+        <div class="sheet-actions">
+          <a class="ghost button-link" data-workspace>Cancel</a>
+          <button id="replace" class="primary" type="button" disabled>
+            Make the new passkey
+          </button>
+          <button id="complete" class="primary" type="button" hidden>
+            The administrator has confirmed
           </button>
         </div>
       </section>

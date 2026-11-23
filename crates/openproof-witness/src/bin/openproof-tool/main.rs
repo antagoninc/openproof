@@ -42,6 +42,7 @@ const USAGE: &str = concat!(
     "  install DIR TRUST\n",
     "  revoke DIR NONCE_OR_KEY\n",
     "  gap DIR KEY TRUST < REASON_JSON\n",
+    "  replace-passkey DIR ROOT [RECEIVER_KEY] < SIGNED_TRUST   (tests; not for a role service)\n",
     "  role-init DIR ROOT\n",
     "  sign-trust-untracked KEY < TRUST\n",
     "  trust-floor DIR\n",
@@ -219,6 +220,15 @@ fn dispatch(a: &[&str]) -> Result<serde_json::Value> {
         ["revoke", state, value] => {
             revoke(Path::new(state), value)?;
             serde_json::json!({"revoked":true})
+        }
+        // What the role service does for the administrator (docs/PASSKEY.md),
+        // for a state without a role service. With the receiver's key it also
+        // writes the `passkey` receipt.
+        ["replace-passkey", state, root, rest @ ..] if rest.len() <= 1 => {
+            let secret = rest.first().map(key).transpose()?;
+            let receipt =
+                replace_owner_passkey(Path::new(state), &input()?, root, secret.as_ref(), now())?;
+            serde_json::json!({"receipt": receipt})
         }
         ["gap", state, secret, configuration] => serde_json::to_value(gap(
             Path::new(state),

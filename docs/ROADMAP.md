@@ -13,12 +13,13 @@ One path works on one computer:
 |---|---|
 | Approval of the exact content with a passkey, checked by the review page and again by the receiver | [PASSKEY.md](PASSKEY.md) |
 | The receiver and the witness under their own accounts, with a status check of the result | [LOCAL-ROLES.md](LOCAL-ROLES.md) |
+| Replacement of a lost passkey through the administrator, as a receipt in the history | [PASSKEY.md](PASSKEY.md) |
 | Approved documents as files that only the receiver's account can change | [PROTECTED-FILES.md](PROTECTED-FILES.md) |
 | The witness history as a transparency log that other witnesses can cosign | [WITNESS-NETWORK.md](WITNESS-NETWORK.md) |
 | A separate Go verifier of exported histories | [README](../README.md#verify-offline) |
 | Agent tools that can propose and execute approved work, and cannot approve | [WITNESSED-WORKFLOW.md](WITNESSED-WORKFLOW.md) |
 | A link from OpenProof approvals to TRACE Trust Records | [integrations/trace](../integrations/trace/README.md) |
-| A counted list of the trusted code, 4,335 lines | [TCB.md](TCB.md) |
+| A counted list of the trusted code, 4,845 lines | [TCB.md](TCB.md) |
 | A threat model for this version | [threatmodel.md](threatmodel.md) |
 
 ## Open gates
@@ -32,28 +33,25 @@ These stop stronger statements. None is met today.
 2. **A human security review.** None has been done. The brief is
    [handoff/REVIEW-BRIEF.md](handoff/REVIEW-BRIEF.md). Reviews by AI models
    were done and are labelled as such; they do not count for this gate.
-3. **Replacement of a lost passkey.** Not supported. A home whose passkey is
-   lost approves no new change.
-4. **A release.** No versioned release, signed binary or package exists.
+3. **A release.** No versioned release, signed binary or package exists.
    Install is a build from source. No build has been reproduced on a
    separate machine by another party. The first versioned release waits for
    the human review ([RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md)).
-5. **Independent operators on separate hosts.** The role services run on the
+4. **Independent operators on separate hosts.** The role services run on the
    owner's computer only. A remote role service needs a reviewed transport
    first ([handoff/OPERATORS.md](handoff/OPERATORS.md)).
-6. **Trusted code under 4,000 lines.** It is 4,335. The candidate that is
-   left is small ([TCB.md](TCB.md#reduction-history)).
+5. **Trusted code under 4,000 lines.** It is 4,845, after the replacement of
+   a lost passkey added 510 lines. The candidate that is left is small
+   ([TCB.md](TCB.md#reduction-history)).
 
 ## Next
 
 In this order. The order can change after the review.
 
-1. Replacement of a lost passkey, with a design that is reviewed before the
-   build, because it changes trusted code.
-2. A human review of one fixed commit, a public report, and a retest of the
+1. A human review of one fixed commit, a public report, and a retest of the
    corrections.
-3. The first versioned release from the reviewed commit.
-4. Cosigning by independent witnesses, then the question of G2's condition.
+2. The first versioned release from the reviewed commit.
+3. Cosigning by independent witnesses, then the question of G2's condition.
 
 Later, not designed yet: approved actions other than a document change.
 

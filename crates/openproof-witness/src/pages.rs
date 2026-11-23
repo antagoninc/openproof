@@ -100,7 +100,9 @@ pub fn verify_page(
                 && x.observed_at <= pinned.payload.observed_at,
             "page chain/time",
         )?;
-        if x.kind == "gap" {
+        if replacement_receipt(&t.payload, x)? {
+            // The administrator replaced the owner passkey here.
+        } else if x.kind == "gap" {
             gaps = true;
         } else {
             let q = qs

@@ -201,13 +201,61 @@ pub fn verify_assertion(
     Ok(())
 }
 
-/// History rule: a request needs an assertion exactly when the trust has a passkey
-/// and the receipt sequence is at or after `from_sequence`.
+/// Every owner passkey of a trust, oldest first: the retired ones, then the current one.
+pub fn owner_passkeys(t: &Trust) -> impl Iterator<Item = &OwnerPasskey> {
+    t.retired_owner_passkeys.iter().chain(&t.owner_passkey)
+}
+
+/// At most 8 retired passkeys, none without a current one, each one valid, and
+/// each one starting at a later sequence than the one before it.
+pub(crate) fn validate_owner_passkeys(t: &Trust) -> Result<()> {
+    check(
+        t.retired_owner_passkeys.len() <= 8
+            && (t.retired_owner_passkeys.is_empty() || t.owner_passkey.is_some()),
+        "retired owner passkeys need a current one, at most 8",
+    )?;
+    let mut last = 0;
+    for k in owner_passkeys(t) {
+        k.validate()?;
+        check(k.from_sequence > last, "owner passkeys out of order")?;
+        last = k.from_sequence;
+    }
+    Ok(())
+}
+
+/// The SHA-256 that a `passkey` receipt carries for the passkey that starts after it.
+pub fn passkey_hash(k: &OwnerPasskey) -> Result<String> {
+    Ok(hash(&canonical(k)?))
+}
+
+/// History rule for replacements: every owner passkey after the first one
+/// starts right after a receiver receipt of kind `passkey` that carries its
+/// hash. True when `x` is that receipt. A `passkey` receipt that the trust does
+/// not explain is refused, and so is a replacement without its receipt.
+pub fn replacement_receipt(t: &Trust, x: &Receipt) -> Result<bool> {
+    let starts = owner_passkeys(t)
+        .skip(1)
+        .find(|k| k.from_sequence == x.sequence + 1);
+    match (starts, x.kind == "passkey") {
+        (Some(k), true) => {
+            check(
+                x.content_sha256 == passkey_hash(k)?,
+                "replacement receipt names another owner passkey",
+            )?;
+            Ok(true)
+        }
+        (None, false) => Ok(false),
+        _ => Err("owner passkey replacement and its receipt do not match".into()),
+    }
+}
+
+/// History rule: a request needs an assertion exactly when a passkey of the
+/// trust was in force at the receipt sequence: the one with the latest
+/// `from_sequence` at or before it.
 pub fn check_owner_assertion(q: &Request, t: &Trust, sequence: u64) -> Result<()> {
-    let required = t
-        .owner_passkey
-        .as_ref()
-        .filter(|k| sequence >= k.from_sequence);
+    let required = owner_passkeys(t)
+        .filter(|k| sequence >= k.from_sequence)
+        .max_by_key(|k| k.from_sequence);
     match (required, &q.owner_assertion) {
         (Some(k), Some(a)) => verify_assertion(a, k, &digest(&q.approval.payload)?),
         (Some(_), None) => Err("owner passkey assertion required".into()),
@@ -241,8 +289,107 @@ pub fn check_request_assertion(q: &Request, t: &Trust) -> Result<()> {
     verify_assertion(a, k, &digest(&q.approval.payload)?)
 }
 
+/// What a state pins: the current passkey, and the retired ones when there are
+/// some. Without retired ones it is the record that earlier versions pinned.
+pub fn owner_passkey_pin_record(t: &Trust) -> Result<Option<String>> {
+    Ok(match (&t.owner_passkey, &t.retired_owner_passkeys) {
+        (None, _) => None,
+        (Some(k), retired) if retired.is_empty() => Some(serde_json::to_string(k)?),
+        (Some(k), retired) => Some(serde_json::to_string(&(retired, k))?),
+    })
+}
+
+/// How many passkeys a trust adds to a pin record: `Some(n)` when the trust
+/// keeps every pinned passkey as it is and has `n` later ones after them.
+pub fn passkeys_added(pinned: &str, t: &Trust) -> Result<Option<usize>> {
+    let mut before = t.clone();
+    for n in 0..=t.retired_owner_passkeys.len() {
+        if owner_passkey_pin_record(&before)?.as_deref() == Some(pinned) {
+            return Ok(Some(n));
+        }
+        before.owner_passkey = before.retired_owner_passkeys.pop();
+    }
+    Ok(None)
+}
+
+/// Replace the pinned owner passkey of a role state. Only the role service
+/// calls this, and only for the administrator (docs/PASSKEY.md): a root
+/// signature is not enough, because the root key is a file of the owner.
+/// The new trust must keep the pinned passkeys as they are and add later
+/// ones. A receiver (`receiver` is its key) takes exactly one new passkey,
+/// writes the `passkey` receipt, and the new passkey must start right after
+/// it. A witness follows the receiver and can be more than one behind.
+#[doc(hidden)]
+pub fn replace_owner_passkey(
+    path: &Path,
+    signed: &Signed<Trust>,
+    root: &str,
+    receiver: Option<&SigningKey>,
+    time: u64,
+) -> Result<Option<Signed<Receipt>>> {
+    let t = &signed.payload;
+    let mut c = connect(path)?;
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let pinned: String = tx
+        .query_row("SELECT record FROM owner_passkey_pin WHERE id=1", [], |r| {
+            r.get(0)
+        })
+        .map_err(|_| "this state has no owner passkey to replace")?;
+    let added = passkeys_added(&pinned, t)?.unwrap_or(0);
+    check(
+        added == 1 || (added > 1 && receiver.is_none()),
+        "the new trust must keep the pinned owner passkeys and add one",
+    )?;
+    tx.execute(
+        "UPDATE owner_passkey_pin SET record=?1 WHERE id=1",
+        [owner_passkey_pin_record(t)?],
+    )?;
+    roles::role_install_in(&tx, signed, root, time)?;
+    let receipt = match (receiver, &t.owner_passkey) {
+        (Some(key), Some(k)) => {
+            check(
+                hex::encode(key.verifying_key().to_bytes()) == t.receiver,
+                "wrong receiver signer",
+            )?;
+            let (n, head) = tip(&tx)?;
+            check(
+                k.from_sequence == n + 2,
+                "the new owner passkey must start right after the replacement receipt",
+            )?;
+            let r = sign(
+                Receipt {
+                    version: V.into(),
+                    kind: "passkey".into(),
+                    sequence: n + 1,
+                    previous: head,
+                    approval_sha256: ZERO.into(),
+                    document: String::new(),
+                    document_version: 0,
+                    content_sha256: passkey_hash(k)?,
+                    observed_at: time,
+                    reason: String::new(),
+                },
+                key,
+            )?;
+            tx.execute(
+                "INSERT INTO events VALUES(?1,?2,?3,NULL)",
+                params![n + 1, digest(&r.payload)?, serde_json::to_string(&r)?],
+            )?;
+            history_budget(&tx, &t.receiver)?;
+            clock::signed_time(&tx, time)?;
+            Some(r)
+        }
+        _ => None,
+    };
+    tx.commit()?;
+    Ok(receipt)
+}
+
 /// Once a state has installed a trust with an owner passkey, every later trust must
-/// keep the identical passkey. A stolen root key cannot silently remove or replace it.
+/// keep the identical passkeys. A stolen root key cannot silently remove or replace
+/// one. For a receiver or a witness, `replace_owner_passkey` is the one way to move
+/// the pin. The owner's own verifier and gate follow the receiver
+/// (`follow_owner_passkey` in `openproof-witness`).
 #[doc(hidden)]
 pub fn pin_owner_passkey(tx: &rusqlite::Transaction<'_>, t: &Trust) -> Result<()> {
     tx.execute_batch(
@@ -253,11 +400,7 @@ pub fn pin_owner_passkey(tx: &rusqlite::Transaction<'_>, t: &Trust) -> Result<()
             r.get(0)
         })
         .optional()?;
-    let current = match &t.owner_passkey {
-        Some(k) => Some(serde_json::to_string(k)?),
-        None => None,
-    };
-    match (pinned, current) {
+    match (pinned, owner_passkey_pin_record(t)?) {
         (None, None) => Ok(()),
         (None, Some(record)) => {
             tx.execute("INSERT INTO owner_passkey_pin VALUES(1,?1)", [record])?;
@@ -301,6 +444,7 @@ mod tests {
             receiver: key(2),
             witness: key(3),
             owner_passkey,
+            retired_owner_passkeys: vec![],
         }
     }
 
@@ -611,6 +755,36 @@ mod tests {
         let mut value = serde_json::to_value(with(&q, assertion(&q, parts()))).unwrap();
         value["owner_assertion"]["extra"] = serde_json::json!("x");
         assert!(openproof_core::parse::<Request>(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+
+    #[test]
+    fn retired_passkeys_are_validated() {
+        let mut t = trust(Some(passkey(5)));
+        t.retired_owner_passkeys = vec![passkey(2), passkey(3)];
+        t.validate(100).unwrap();
+        let refused = |change: &dyn Fn(&mut Trust)| {
+            let mut bad = t.clone();
+            change(&mut bad);
+            assert!(bad.validate(100).is_err());
+        };
+        refused(&|t| t.owner_passkey = None);
+        refused(&|t| t.retired_owner_passkeys[1].from_sequence = 5);
+        refused(&|t| t.retired_owner_passkeys[1].from_sequence = 6);
+        refused(&|t| t.retired_owner_passkeys[0].from_sequence = 3);
+        refused(&|t| t.retired_owner_passkeys[0].rp_id = "Localhost".into());
+        refused(&|t| {
+            t.owner_passkey = Some(passkey(10));
+            t.retired_owner_passkeys = (1..=9).map(passkey).collect()
+        });
+        // Eight retired passkeys are the limit.
+        let mut full = trust(Some(passkey(9)));
+        full.retired_owner_passkeys = (1..=8).map(passkey).collect();
+        full.validate(100).unwrap();
+        // An empty list has one encoding: the field is absent.
+        let mut value = serde_json::to_value(trust(Some(passkey(5)))).unwrap();
+        assert!(value.get("retired_owner_passkeys").is_none());
+        value["retired_owner_passkeys"] = serde_json::json!([]);
+        assert!(openproof_core::parse::<Trust>(&serde_json::to_vec(&value).unwrap()).is_err());
     }
 
     #[test]

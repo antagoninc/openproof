@@ -4,6 +4,7 @@
 import argparse, base64, copy, hashlib, json, subprocess, time
 from pathlib import Path
 from witness_workflow import ROOT, TOOL, Broker, initialize, save, ref, enroll_passkey
+from witness_workflow import replace_passkey
 
 ORIGIN = "http://localhost:8765"
 
@@ -264,6 +265,112 @@ def passkey_cases(out, go_binary):
     raw = json.dumps(package).encode()
     yield "unexpected-not-configured", False, run_both(
         out, go_binary, now, plain, pin, raw
+    )
+
+    # The administrator replaces the passkey. Receipt 3 is the `passkey`
+    # receipt; receipt 4 is approved with the new passkey.
+    new_key = ec.generate_private_key(ec.SECP256R1())
+    new_point = new_key.public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
+    )
+    done = replace_passkey(
+        home, dict(public_key=new_point.hex(), rp_id="localhost", origin=ORIGIN)
+    )
+    assert done["status"] == "replaced", done
+    identity = b.propose("report", 2, "Approved with the new passkey.")["proposal_id"]
+    review = b.review(identity)
+    challenge = call(
+        ["gate-approve", home, home / "trust.json", identity, review["review_sha256"]]
+    )
+    passkey_approve = [
+        "gate-approve-passkey",
+        home,
+        home / "trust.json",
+        identity,
+        challenge["approval_sha256"],
+    ]
+    try:
+        call(passkey_approve, assertion(challenge["approval_sha256"]))
+        raise AssertionError("the gate took an assertion of the retired passkey")
+    except RuntimeError:
+        pass
+    call(passkey_approve, assertion(challenge["approval_sha256"], signer=new_key))
+    r = b.commit(identity)
+    assert r["verification_status"] == "local_consistency_verified", r
+    package = json.loads((Path(r["evidence_directory"]) / "package.json").read_text())
+    kinds = [x["payload"]["kind"] for x in package["receipts"]]
+    assert kinds == ["update", "update", "passkey", "update"], kinds
+    after = json.loads((home / "trust.json").read_text())
+    assert len(after["retired_owner_passkeys"]) == 1, after
+    pin = out / "pin-replaced.json"
+    save(pin, package["checkpoint"])
+    now = str(int(time.time()))
+    raw = json.dumps(package).encode()
+
+    def under(name, expected, change, evidence=raw):
+        t = copy.deepcopy(after)
+        change(t)
+        path = out / ("trust-" + name + ".json")
+        save(path, t)
+        try:
+            return name, expected, run_both(out, go_binary, now, path, pin, evidence)
+        except AssertionError as e:
+            raise AssertionError(name, *e.args) from None
+
+    def start(n):
+        def change(t):
+            t["owner_passkey"]["from_sequence"] = n
+
+        return change
+
+    def retired(key, value):
+        def change(t):
+            t["retired_owner_passkeys"][0][key] = value
+
+        return change
+
+    def not_retired(t):
+        del t["retired_owner_passkeys"]
+
+    def no_replacement(t):
+        t["owner_passkey"] = t.pop("retired_owner_passkeys")[0]
+
+    def other_new_key(t):
+        t["owner_passkey"]["public_key"] = point.hex()
+
+    def empty_list(t):
+        t["retired_owner_passkeys"] = []
+
+    def too_many(t):
+        t["retired_owner_passkeys"] = [
+            dict(t["retired_owner_passkeys"][0], from_sequence=n) for n in range(9)
+        ]
+
+    yield under("replaced-valid", True, lambda t: None)
+    yield under("replaced-old-passkey-not-retired", False, not_retired)
+    yield under("replaced-trust-before-replacement", False, no_replacement)
+    yield under("replaced-new-passkey-starts-late", False, start(5))
+    yield under("replaced-new-passkey-starts-early", False, start(3))
+    yield under("replaced-other-new-key", False, other_new_key)
+    yield under("replaced-old-origin-changed", False, retired("origin", ORIGIN[:-1]))
+    yield under("replaced-old-passkey-starts-early", False, retired("from_sequence", 1))
+    yield under("replaced-old-passkey-out-of-order", False, retired("from_sequence", 4))
+    yield under("replaced-empty-retired-list", False, empty_list)
+    yield under("replaced-too-many-retired", False, too_many)
+    # The assertions cannot change places: each one is for its own passkey.
+    x = copy.deepcopy(package)
+    old_one, new_one = x["requests"][1], x["requests"][2]
+    old_one["owner_assertion"], new_one["owner_assertion"] = (
+        assertion(digest(old_one), signer=new_key),
+        assertion(digest(new_one)),
+    )
+    yield under(
+        "replaced-assertions-exchanged", False, lambda t: None, json.dumps(x).encode()
+    )
+    x = copy.deepcopy(package)
+    x["requests"][2]["owner_assertion"] = assertion(digest(x["requests"][2]))
+    yield under(
+        "replaced-retired-passkey-after", False, lambda t: None, json.dumps(x).encode()
     )
 
 

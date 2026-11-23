@@ -213,11 +213,21 @@ func signed(v any, k any, domain string) map[string]any {
 }
 func trust(v any, now uint64) map[string]any {
 	t := obj(v)
-	if k, ok := t["owner_passkey"]; ok {
-		fields(t, "version", "epoch", "expires_at", "authority", "receiver", "witness", "previous_authorities", "revoked_authorities", "owner_passkey")
-		ownerPasskey(k)
-	} else {
-		fields(t, "version", "epoch", "expires_at", "authority", "receiver", "witness", "previous_authorities", "revoked_authorities")
+	names := []string{"version", "epoch", "expires_at", "authority", "receiver", "witness", "previous_authorities", "revoked_authorities"}
+	_, current := t["owner_passkey"]
+	if current {
+		names = append(names, "owner_passkey")
+	}
+	if r, ok := t["retired_owner_passkeys"]; ok {
+		names = append(names, "retired_owner_passkeys")
+		need(current && len(arr(r)) > 0 && len(arr(r)) <= 8)
+	}
+	fields(t, names...)
+	first := uint64(0)
+	for _, k := range ownerPasskeys(t) {
+		n := num(ownerPasskey(k)["from_sequence"])
+		need(n > first)
+		first = n
 	}
 	need(str(t["version"]) == version && num(t["epoch"]) > 0 && num(t["epoch"]) <= uint64(1<<63-1) && now <= num(t["expires_at"]))
 	a, r, w := str(t["authority"]), str(t["receiver"]), str(t["witness"])
@@ -309,7 +319,9 @@ func verify(tv, pinv, pv any, now uint64) map[string]any {
 		kind := str(r["kind"])
 		reason := str(r["reason"])
 		need(len(reason) <= 512)
-		if kind == "gap" {
+		if replacementReceipt(t, r) {
+			// The administrator replaced the owner passkey here.
+		} else if kind == "gap" {
 			need(str(r["document"]) == "" && num(r["document_version"]) == 0 && reason != "" && str(r["approval_sha256"]) == zero && str(r["content_sha256"]) == zero)
 			gaps = true
 		} else {

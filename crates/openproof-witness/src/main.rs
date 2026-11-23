@@ -59,6 +59,7 @@ const USAGE: &str = concat!(
     "  owner-app --home HOME [--port PORT] [--open]\n",
     "  mcp HOME\n",
     "  init-home HOME | renew HOME | enable-paging HOME | install-trust HOME TRUST\n",
+    "  prepare-passkey-replacement HOME < PASSKEY | finish-passkey-replacement HOME\n",
     "  broker-propose HOME < PROPOSAL | broker-review HOME ID\n",
     "  broker-commit HOME ID | broker-recover HOME ID | export-history HOME DIR\n",
     "  keygen FILE\n",

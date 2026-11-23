@@ -25,8 +25,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 # The trusted code total may not grow past this without a TCB.md change.
-# The aim stated in docs/TCB.md is under 4,000.
-BUDGET = 4340
+# The aim stated in docs/TCB.md was under 4,000. The replacement of the owner
+# passkey (23 Nov 2026) raised the count from 4,335 to 4,845.
+BUDGET = 4850
 G1, G2, G3 = "G1", "G2", "G3"
 # path: (guarantees, what it is trusted for, counting)
 TRUSTED = {
@@ -43,6 +44,7 @@ TRUSTED = {
     "crates/openproof-receiver/src/files.rs": ((G1, G2), "atomic file writes"),
     "crates/openproof-role/src/main.rs": ((G1, G2), "role service"),
     "scripts/roles_status.py": ((G1,), "check of the role accounts"),
+    "scripts/roles_passkey.py": ((G1,), "administrator's passkey replacement"),
     "scripts/local_roles.py": ((G1,), "accounts; copies of code and state", "regions"),
     "app/review.html": ((G1,), "review page"),
     "app/review.js": ((G1,), "review page"),

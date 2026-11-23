@@ -49,6 +49,7 @@ fn home(owner_passkey: Option<OwnerPasskey>) -> Home {
         receiver: public(&SigningKey::from_bytes(&[2; 32])),
         witness: public(&SigningKey::from_bytes(&[3; 32])),
         owner_passkey,
+        retired_owner_passkeys: vec![],
     };
     Home { dir, t, a }
 }
@@ -343,6 +344,7 @@ fn assertion_for_another_digest_or_proposal_is_refused() {
     );
     let plain = Trust {
         owner_passkey: None,
+        retired_owner_passkeys: vec![],
         ..h.t.clone()
     };
     err(
@@ -381,6 +383,7 @@ fn passkey_cannot_be_dropped_from_the_trust() {
     approve(&h, &id).unwrap();
     let plain = Trust {
         owner_passkey: None,
+        retired_owner_passkeys: vec![],
         ..h.t.clone()
     };
     err(

@@ -8,7 +8,7 @@ guarantee. Reviewers and auditors start here.
 
 `scripts/tcb_count.py` makes the counts below: non-blank lines, without Rust
 test modules or Go test files. Validation runs it with `--check`, which fails
-when the total is over the budget in that script (4,340 lines), when a source
+when the total is over the budget in that script (4,850 lines), when a source
 file of the trusted crates is not listed, when a trusted crate depends on
 another workspace crate, when the review origin serves or loads a file that is
 not listed, or when the totals in this file differ from the count. Update this file in the same change that adds or removes trusted code.
@@ -40,7 +40,7 @@ With separate role accounts, the receiver and the witness run as
 
 | ID | Guarantee | Holds today when | Does not hold when |
 |---|---|---|---|
-| G1 | The receiver changes a document only for content, version and receiver that an active authority approved, at most once, before the approval expires. With an owner passkey in the trust, each approval also carries a user-verified passkey assertion over its digest. | An owner passkey is installed ([PASSKEY.md](PASSKEY.md)) and the receiver runs under its own account ([LOCAL-ROLES.md](LOCAL-ROLES.md)). The status check (`roles_status.py`) shows both: `"separated": true` and `"passkey_required_by_receiver": true`. | No passkey is installed and a process that runs as the owner's account reads `authority/key.secret`. With a passkey but without separate role accounts: that process changes the receiver's state directly. In every case: the owner confirms a passkey prompt for content they did not mean to approve, or someone with the administrator password changes the role accounts. |
+| G1 | The receiver changes a document only for content, version and receiver that an active authority approved, at most once, before the approval expires. With an owner passkey in the trust, each approval also carries a user-verified passkey assertion over its digest. | An owner passkey is installed ([PASSKEY.md](PASSKEY.md)) and the receiver runs under its own account ([LOCAL-ROLES.md](LOCAL-ROLES.md)). The status check (`roles_status.py`) shows both: `"separated": true` and `"passkey_required_by_receiver": true`. | No passkey is installed and a process that runs as the owner's account reads `authority/key.secret`. With a passkey but without separate role accounts: that process changes the receiver's state directly. In every case: the owner confirms a passkey prompt for content they did not mean to approve, or someone with the administrator password changes the role accounts or replaces the owner passkey ([PASSKEY.md](PASSKEY.md)). |
 | G2 | Every receipt is in the witness's signed, ordered history. Omission, reordering or a fork is detected against a trusted checkpoint. | The witness key is held by a party other than the receiver. | The witness runs on the owner's computer. Separate role accounts keep the witness key from the owner account, but the root key is still in the owner home and one administrator controls both accounts. |
 | G3 | A third party can verify an exported history offline, without Antagon code other than the Go verifier, given the trusted root and a current checkpoint. | The verifier binary and root are obtained independently of the archive. | The verifier or root comes from the same archive it checks. |
 
@@ -53,7 +53,8 @@ single-use nonce; and an assertion from the owner passkey over that approval's
 digest (`admit_owner_assertion` in `apply`). The assertion must come from the
 passkey's registered origin. The trust the receiver admits under is installed
 only with a root signature, and a later trust can neither remove nor replace
-the passkey (`pin_owner_passkey`).
+the passkey (`pin_owner_passkey`). Only the administrator replaces it
+("The replacement of the owner passkey", below).
 
 So code that runs as the owner can propose, block, delay or send bytes, but
 cannot get a change admitted that the passkey did not sign. That holds for the
@@ -165,6 +166,64 @@ What the status check cannot see:
   of that account can change everything here. Use a standard account as the
   owner. G1's row names the administrator password as its limit.
 
+## The replacement of the owner passkey
+
+A lost passkey can be replaced ([PASSKEY.md](PASSKEY.md)). The root key is a
+file in the owner home, so a root signature must not be enough: code in the
+owner's account would install its own passkey. The administrator authorizes
+the replacement. G1's row already names the administrator as its limit, so
+this adds no trusted party.
+
+What is trusted for it, and listed:
+
+- **The role service takes `replace-passkey` only from user ID 0,** by the
+  same kernel report of the peer's account that admits the owner
+  (`openproof-role`). From the owner's account it answers 403.
+- **The receiver moves its pin only there** (`replace_owner_passkey` in
+  `passkey.rs`). The new trust must have the root's signature and a higher
+  epoch, keep the role keys, keep every pinned passkey as it is and add one.
+  In the same transaction the receiver writes a receipt of kind `passkey`
+  with the hash of the new passkey, and the new passkey must start at the
+  next sequence number. Every other trust install still refuses a changed
+  passkey. The witness follows the receiver through the same operation and
+  writes no receipt.
+- **The administrator's tool checks which passkey it installs**
+  (`scripts/roles_passkey.py`, a root-owned copy like the status check). The
+  prepared replacement is a file of the owner's account and is not trusted.
+  The tool asks the administrator to type the code that the set-up page
+  shows, and continues only when it is the code of the passkey in that file.
+  The code is 80 bits of a SHA-256 over the public key, the relying party
+  and the origin. So another key, or the same key for another address, has
+  another code. The tool takes the owner home from the install record, a
+  file of root, and not from its command line.
+- **The set-up page computes the code itself,** from the key that the
+  authenticator returned to it and from its own address (`passkeyCode` in
+  `app/common.js`). The command that the page shows for the administrator
+  is fixed text of the page. The owner app's server chooses neither.
+- **The verifiers check each approval against the passkey that was in force
+  at its receipt,** and accept a later passkey only right after the
+  receiver's `passkey` receipt that carries its hash (`replacement_receipt`
+  in `passkey.rs`; `replacementReceipt` and `samePasskey` in the Go
+  verifier).
+
+What is not trusted: the owner app's part. It prepares the root-signed
+trust. Afterwards it takes the receiver's passkeys from the receiver service
+(`signed-trust`) and moves the pins of the owner's own verifier and gate
+(`follow_owner_passkey`). The verifier follows only a passkey whose receipt
+it has not yet verified, so the `passkey` receipt is still checked. A defect
+in this part can prepare a replacement that the tool or the receiver
+refuses, or leave the owner's side behind. It cannot make the receiver take
+a passkey.
+
+Limits: the administrator can replace the passkey at any time; that is the
+administrator's power, as before. An administrator who runs another program
+than the root-owned tool, or who types a code that did not come from the
+owner's page, is deceived: the tool cannot see who typed the code. Code that
+controls the browser when the new passkey is made can show a wrong code, as
+for the first set-up. A trust holds at most 8 retired passkeys, so a home
+can replace its passkey 8 times. Without separate role accounts there is no
+administrator to ask, and the owner app offers no replacement.
+
 In the test mode (`--manager manual`), there is no definition file. The
 status check then compares the command line and the account of the running
 process, and it does not check the program file. Do not use this mode
@@ -179,9 +238,9 @@ they did not mean to approve. See the G1 row above.
 | File | Lines | G1 | G2 | G3 | Role |
 |---|---:|:-:|:-:|:-:|---|
 | `crates/openproof-core/src/lib.rs` | 320 | ✓ | ✓ | | Canonical bytes (OPEC-1), domain-separated Ed25519 signatures, strict parsing |
-| `crates/openproof-receiver/src/lib.rs` | 644 | ✓ | ✓ | | Trust, approvals, receiver admission and replay state, receipts, witness checkpoints, export |
-| `crates/openproof-receiver/src/passkey.rs` | 255 | ✓ | | | Owner passkey: trust field validation, WebAuthn assertion check, passkey pin |
-| `crates/openproof-receiver/src/roles.rs` | 72 | ✓ | ✓ | | Root-signed trust install for a role state; verified export |
+| `crates/openproof-receiver/src/lib.rs` | 653 | ✓ | ✓ | | Trust, approvals, receiver admission and replay state, receipts, witness checkpoints, export |
+| `crates/openproof-receiver/src/passkey.rs` | 391 | ✓ | | | Owner passkey: trust field validation, WebAuthn assertion check, passkey pin, the passkey in force at a receipt, the administrator's replacement and its receipt |
+| `crates/openproof-receiver/src/roles.rs` | 80 | ✓ | ✓ | | Root-signed trust install for a role state; verified export |
 | `crates/openproof-receiver/src/pages.rs` | 82 | ✓ | ✓ | | Bounded history pages; the paged store bound inside admission |
 | `crates/openproof-receiver/src/publish.rs` | 54 | ✓ | | | Protected files: each approved document as a file in the receiver's folder ([PROTECTED-FILES.md](PROTECTED-FILES.md)) |
 | `crates/openproof-receiver/src/tlog.rs` | 198 | | ✓ | | The history as an RFC 6962 tree; C2SP checkpoints signed by the witness key |
@@ -189,21 +248,23 @@ they did not mean to approve. See the G1 row above.
 | `crates/openproof-receiver/src/http.rs` | 113 | ✓ | ✓ | | One bounded message for each connection; strict JSON (no duplicate keys or floats) |
 | `crates/openproof-receiver/src/keys.rs` | 45 | ✓ | ✓ | | Private key and bounded file reads |
 | `crates/openproof-receiver/src/files.rs` | 35 | ✓ | ✓ | | New and atomically replaced private files |
-| `crates/openproof-role/src/main.rs` | 401 | ✓ | ✓ | | The role service: Unix socket, peer account check, fixed operations, opt-in trust install that refuses role-key changes, optional protected files |
-| `scripts/roles_status.py` | 340 | ✓ | | | The status check of the role accounts: what root owns (record, code, service definitions), the role accounts, folders and sockets, protected files; what the receiver service reports |
-| `scripts/local_roles.py`, `TCB:` regions | 97 | ✓ | | | Creation of the service accounts, without a password and without a shell; the copies of the role code and the role state |
+| `crates/openproof-role/src/main.rs` | 444 | ✓ | ✓ | | The role service: Unix socket, peer account check, fixed operations, opt-in trust install that refuses role-key changes, passkey replacement for user ID 0 only, its signed trust on request, optional protected files |
+| `scripts/roles_status.py` | 342 | ✓ | | | The status check of the role accounts: what root owns (record, code, service definitions), the role accounts, folders and sockets, protected files; what the receiver service reports |
+| `scripts/roles_passkey.py` | 162 | ✓ | | | The administrator's replacement of the owner passkey: the code check, the request to the receiver, and the witness brought into step with the receiver |
+| `scripts/local_roles.py`, `TCB:` regions | 100 | ✓ | | | Creation of the service accounts, without a password and without a shell; the copies of the role code and the role state |
 | `app/review.html`, `app/review.js` | 298 | ✓ | | | The review page: what the owner sees and approves |
 | `app/approval.js` | 122 | ✓ | | | The approval check and the passkey challenge, in the page |
-| `app/common.js` | 86 | ✓ | | | Requests and text-only rendering for the review origin's pages |
-| `app/setup.html`, `app/setup.js` | 105 | ✓ | | | The passkey set-up page, on the review origin |
-| `crates/openproof-witness/src/owner_app.rs`, `TCB:` regions | 70 | ✓ | | | The two origins and what each serves, the page table, the content security policy |
-| `reference/go-witness/main.go`, `archive.go`, `passkey.go`, `tlog.go` | 921 | | | ✓ | Independent Go verifier of exported histories, including owner assertions and, when given, a quorum of witness cosignatures over the whole history |
+| `app/common.js` | 103 | ✓ | | | Requests and text-only rendering for the review origin's pages; the code of a new passkey |
+| `app/setup.html`, `app/setup.js` | 174 | ✓ | | | The passkey set-up page, on the review origin: first set-up and replacement |
+| `crates/openproof-witness/src/owner_app.rs`, `TCB:` regions | 73 | ✓ | | | The two origins and what each serves, the page table, the content security policy |
+| `reference/go-witness/main.go`, `archive.go`, `passkey.go`, `tlog.go` | 979 | | | ✓ | Independent Go verifier of exported histories, including owner assertions and, when given, a quorum of witness cosignatures over the whole history |
 | `scripts/verify_history.py` | 68 | | | ✓ | Wrapper that runs the independently obtained Go verifier |
 
-Totals: G1 3,148 lines, G2 1,919, G3 989. Files shared between guarantees
-count in each. **Total trusted code: 4,335 lines**. It was about 9,700 under
+Totals: G1 3,600 lines, G2 1,979, G3 1,047. Files shared between guarantees
+count in each. **Total trusted code: 4,845 lines**. It was about 9,700 under
 G1's condition before the reduction of 10 Nov 2026 (8,370 listed, plus 1,350
-for the role accounts), 4,743 after it, and 4,885 with protected files.
+for the role accounts), 4,743 after it, 4,885 with protected files, and 4,335
+before the replacement of the owner passkey.
 
 ## Protected files
 
@@ -215,7 +276,7 @@ service, and the status check checks the folder, so both are listed. The option 
 run.
 
 As before, style sheets are listed apart and not counted: the review origin's
-`app/base.css` (484 lines) is trusted for what the owner sees. The workspace's
+`app/base.css` (495 lines) is trusted for what the owner sees. The workspace's
 `app/app.css` is not.
 
 Not counted, as before: the Rust dependencies `rusqlite` (with bundled SQLite),
@@ -234,7 +295,7 @@ The trusted Rust forbids `unsafe` code, except one function in
 | Owner side | `crates/openproof-witness` (`gate.rs`, `broker.rs`, `owner_app.rs` outside its `TCB:` regions, `mcp.rs`, `transport.rs`, `zip.rs`, `verifier.rs`, `pages.rs`, `clock_recovery.rs`, `tlog.rs`) | The receiver checks every request it admits; the review page checks every approval before the passkey signs it |
 | Installer of the role accounts | `scripts/local_roles.py`, outside its `TCB:` region | The status check finds what it did, from root-owned files (above). It still runs as root one time: read it before you run it |
 | Owner app's web server | `crates/openproof-witness/src/web.rs` | HTTP for the browser. The role services no longer read HTTP |
-| Operator and test commands | `openproof-tool` (`crates/openproof-witness/src/bin/openproof-tool/`) | Not on the main path, never run by the role services. It refuses a role state that a role service owns. `approve` there signs without the gate's review binding; the receiver refuses such a request when a passkey is in force |
+| Operator and test commands | `openproof-tool` (`crates/openproof-witness/src/bin/openproof-tool/`) | Not on the main path, never run by the role services. It refuses a role state that a role service owns. `approve` there signs without the gate's review binding; the receiver refuses such a request when a passkey is in force. `replace-passkey` there does the administrator's replacement on a state without a role service, for tests; such a state is in the owner's reach in any case |
 | Workspace pages | `app/index.html`, `app/app.js`, `app/app.css` | They run on the workspace origin: an assertion obtained there is refused, and they cannot script the review origin's pages |
 | Witness network submitter | `scripts/tlog_submit.py` | It only carries bytes; cosignatures are checked when saved and again by the Go verifier ([WITNESS-NETWORK.md](WITNESS-NETWORK.md)) |
 | Planned key handover and storage pilot formats | `crates/openproof-witness/src/rotation.rs`, `storage.rs`, `openproof-tool` experimental commands | Experimental; Cargo feature `experimental`, not in the default build |
@@ -283,7 +344,15 @@ tag `experiments-2026-11-08`, and the TLS role service at commit `51c0978`
    - The role services read one length-prefixed JSON message for each
      connection. HTTP parsing left the trusted code and is now only in the
      owner app.
-7. Open. The aim is under 4,000 lines. What is left is the receiver, the
-   role service, the review pages, the witness log and the Go verifier.
-   Candidates: the full-package export and its bound inside admission in
+7. Added (23 Nov 2026), 4,335 lines to 4,845: the replacement of a lost
+   owner passkey (above). A home that locks its owner out after one lost
+   passkey was the worse defect. The parts: the receiver's rule and the
+   receipt (153 lines), the role service operations (43), the
+   administrator's tool (162, and 5 in the installer and the status check),
+   the set-up page and its code (86, and 3 in the owner app's table), the Go
+   verifier (58).
+8. Open. The aim was under 4,000 lines, and the count is now further from
+   it. What is left is the receiver, the role service, the review pages, the
+   witness log, the two root-owned tools and the Go verifier. Candidates: the
+   full-package export and its bound inside admission in
    `openproof-receiver/src/lib.rs`, which the paged evidence can replace.

@@ -613,7 +613,11 @@ fn install_trust_locked(home: &Path, new: &Value) -> Result<Value> {
         return Err("receiver/witness key rotation requires a future migration protocol".into());
     }
     // The role and verifier states refuse this too; fail before signing.
-    if old.get("owner_passkey").is_some() && new.get("owner_passkey") != old.get("owner_passkey") {
+    if old.get("owner_passkey").is_some()
+        && ["owner_passkey", "retired_owner_passkeys"]
+            .iter()
+            .any(|k| new.get(k) != old.get(k))
+    {
         return Err("an installed owner passkey cannot be removed or replaced".into());
     }
     let signed = call(
@@ -649,10 +653,20 @@ pub fn install_trust(home: &Path, configuration: &Path) -> Result<Value> {
     install_trust_locked(home, &new)
 }
 
+/// The epoch for a new trust: above the installed one, and above every epoch
+/// that the root signer signed. A prepared passkey replacement that was not
+/// applied leaves such an epoch behind.
+fn next_epoch(home: &Path, t: &Value) -> Result<u64> {
+    let signed = openproof_witness::signer_floor(&home.join("root/signer"))?;
+    Ok(t["epoch"].as_u64().ok_or("epoch")?.max(signed) + 1)
+}
+
 pub fn renew(home: &Path) -> Result<Value> {
     let _l = lock(home)?;
+    // The administrator can have replaced the owner passkey since the last trust.
+    follow_receiver_passkeys(home)?;
     let mut t = authenticated_trust(home)?;
-    t["epoch"] = json!(t["epoch"].as_u64().ok_or("epoch")? + 1);
+    t["epoch"] = json!(next_epoch(home, &t)?);
     t["expires_at"] = json!(openproof_witness::now() + 86400);
     install_trust_locked(home, &t)
 }
@@ -668,11 +682,210 @@ pub fn enroll_passkey(home: &Path, public_key: &str, rp_id: &str, origin: &str) 
     }
     // History up to the current receiver head was approved without a passkey.
     let head = count(call(&["head".into(), state(home, "receiver")], None)?)?;
-    t["epoch"] = json!(t["epoch"].as_u64().ok_or("epoch")? + 1);
+    t["epoch"] = json!(next_epoch(home, &t)?);
     t["expires_at"] = json!(openproof_witness::now() + 86400);
     t["owner_passkey"] = json!({"public_key": public_key, "rp_id": rp_id, "origin": origin,
                                 "from_sequence": head + 1});
     install_trust_locked(home, &t)
+}
+
+const REPLACEMENT: &str = "passkey-replacement.json";
+/// The credential of each passkey that this home made, by public key. The
+/// review page needs the credential of the passkey that is in force.
+const CREDENTIALS: &str = "passkey-credentials.json";
+const PASSKEYS: [&str; 2] = ["owner_passkey", "retired_owner_passkeys"];
+
+fn sign_trust(home: &Path, t: &Value) -> Result<Value> {
+    call(
+        &[
+            "sign-trust".into(),
+            arg(home.join("root/key.secret")),
+            arg(home.join("root/signer")),
+        ],
+        Some(t),
+    )
+}
+
+/// With role services, the receiver decides which owner passkeys are in force
+/// (docs/PASSKEY.md). When its trust lists other passkeys than the owner's
+/// trust, the owner's side follows: a new trust epoch with the receiver's
+/// passkeys, for the roles, the verifier and the trust files. True when it
+/// changed something. Without role services there is nothing to follow.
+fn follow_receiver_passkeys(home: &Path) -> Result<bool> {
+    if !home.join("service-client.json").exists() {
+        return Ok(false);
+    }
+    let theirs = call(&["role-trust".into(), state(home, "receiver")], None)?;
+    let theirs = &theirs["payload"];
+    let mine = read_json(home.join("trust.json"))?;
+    if PASSKEYS.iter().all(|k| theirs.get(k) == mine.get(k)) {
+        return Ok(false);
+    }
+    let mut t = mine.clone();
+    let fields = t.as_object_mut().ok_or("trust")?;
+    for k in PASSKEYS {
+        match theirs.get(k) {
+            Some(v) => fields.insert(k.into(), v.clone()),
+            None => fields.remove(k),
+        };
+    }
+    let above = theirs["epoch"].as_u64().ok_or("epoch")? + 1;
+    t["epoch"] = json!(next_epoch(home, &mine)?.max(above));
+    t["expires_at"] = json!(openproof_witness::now() + 86400);
+    let signed = sign_trust(home, &t)?;
+    let root = read_json(home.join("root-public.json"))?["public_key"]
+        .as_str()
+        .ok_or("root key")?
+        .to_string();
+    for role in ROLES {
+        call(
+            &["install-signed".into(), state(home, role), root.clone()],
+            Some(&signed),
+        )
+        .map_err(|_| {
+            format!(
+                "The {role} does not have the owner passkey that the receiver requires. \
+                 The administrator must run roles_passkey.py again."
+            )
+        })?;
+    }
+    call(
+        &["verifier-install".into(), arg(home.join("verifier"))],
+        Some(&signed),
+    )?;
+    replace_json(home.join("trust-signed.json"), &signed)?;
+    replace_json(home.join("trust.json"), &t)?;
+    Ok(true)
+}
+
+/// Prepare the replacement of the owner passkey (docs/PASSKEY.md): a
+/// root-signed trust that retires the current passkey and starts the new one
+/// right after the replacement receipt. This changes nothing by itself: the
+/// receiver takes it only from the administrator (`roles_passkey.py`). It is
+/// good for one day, and only while the receiver's history does not grow.
+pub fn prepare_passkey_replacement(
+    home: &Path,
+    public_key: &str,
+    rp_id: &str,
+    origin: &str,
+    credential_id: Option<&str>,
+) -> Result<Value> {
+    let _l = lock(home)?;
+    admission(home)?;
+    follow_receiver_passkeys(home)?;
+    let mut t = authenticated_trust(home)?;
+    let old = t
+        .get("owner_passkey")
+        .cloned()
+        .ok_or("no owner passkey is installed")?;
+    let head = count(call(&["head".into(), state(home, "receiver")], None)?)?;
+    let mut retired = match t.get("retired_owner_passkeys") {
+        Some(r) => r.as_array().ok_or("retired owner passkeys")?.clone(),
+        None => vec![],
+    };
+    retired.push(old);
+    t["epoch"] = json!(next_epoch(home, &t)?);
+    t["expires_at"] = json!(openproof_witness::now() + 86400);
+    t["retired_owner_passkeys"] = json!(retired);
+    t["owner_passkey"] = json!({"public_key": public_key, "rp_id": rp_id, "origin": origin,
+                                "from_sequence": head + 2});
+    let signed = sign_trust(home, &t)?;
+    if let Some(credential) = credential_id {
+        let mut known = read_json(home.join(CREDENTIALS)).unwrap_or_else(|_| json!({}));
+        known[public_key] = json!(credential);
+        replace_json(home.join(CREDENTIALS), &known)?;
+    }
+    replace_json(
+        home.join(REPLACEMENT),
+        &json!({"version": "openproof-passkey-replacement/1", "signed": signed}),
+    )?;
+    Ok(json!({"prepared_epoch": t["epoch"], "replacement_receipt_sequence": head + 1}))
+}
+
+/// Without role services (tests): take over a replacement that was applied
+/// to this home's own role states with `openproof-tool replace-passkey`.
+/// False while the receiver does not have the `passkey` receipt.
+fn follow_prepared(home: &Path, signed: &Value) -> Result<bool> {
+    let root = read_json(home.join("root-public.json"))?["public_key"]
+        .as_str()
+        .ok_or("root key")?
+        .to_string();
+    let new = call(&["trust-payload".into(), root], Some(signed))?;
+    let passkey: openproof_witness::OwnerPasskey =
+        serde_json::from_value(new["owner_passkey"].clone())?;
+    let sequence = passkey.from_sequence - 1;
+    let receipt = match call(
+        &[
+            "receipt".into(),
+            state(home, "receiver"),
+            sequence.to_string(),
+        ],
+        None,
+    ) {
+        Ok(r)
+            if r["payload"]["kind"] == "passkey"
+                && r["payload"]["content_sha256"]
+                    == json!(openproof_witness::passkey_hash(&passkey)?) =>
+        {
+            r
+        }
+        _ => return Ok(false),
+    };
+    call(
+        &["verifier-install".into(), arg(home.join("verifier"))],
+        Some(signed),
+    )?;
+    replace_json(home.join("trust-signed.json"), signed)?;
+    replace_json(home.join("trust.json"), &new)?;
+    call(
+        &[
+            "witness".into(),
+            state(home, "witness"),
+            arg(home.join("witness/key.secret")),
+            arg(home.join("trust.json")),
+        ],
+        Some(&receipt),
+    )?;
+    Ok(true)
+}
+
+/// Take over a replacement that the administrator applied: the owner's
+/// verifier and trust files follow the receiver. `replaced` when the prepared
+/// passkey is now the one in force; `waiting` while it is not; `none` without
+/// a prepared replacement.
+pub fn finish_passkey_replacement(home: &Path) -> Result<Value> {
+    let _l = lock(home)?;
+    let path = home.join(REPLACEMENT);
+    let prepared = match path.exists() {
+        true => Some(read_json(&path)?["signed"]["payload"]["owner_passkey"].clone()),
+        false => None,
+    };
+    if home.join("service-client.json").exists() {
+        follow_receiver_passkeys(home)?;
+    } else if path.exists() {
+        follow_prepared(home, &read_json(&path)?["signed"])?;
+    }
+    let trust = read_json(home.join("trust.json"))?;
+    let current = &trust["owner_passkey"];
+    // The review page asks for the credential of the passkey in force.
+    if let Some(key) = current["public_key"].as_str() {
+        let known = read_json(home.join(CREDENTIALS)).unwrap_or_else(|_| json!({}));
+        if let Some(credential) = known[key].as_str() {
+            replace_json(
+                home.join("passkey.json"),
+                &json!({"credential_id": credential, "public_key": key}),
+            )?;
+        }
+    }
+    let status = match prepared {
+        None => "none",
+        Some(p) if &p == current => {
+            std::fs::remove_file(&path)?;
+            "replaced"
+        }
+        Some(_) => "waiting",
+    };
+    Ok(json!({"status": status, "installed_epoch": trust["epoch"]}))
 }
 
 /// Export signed public evidence for offline checking. The trust root and the
@@ -824,6 +1037,19 @@ pub fn command(a: &[&str]) -> Result<Option<Value>> {
             let t = |k| crate::http::text(m, k);
             enroll_passkey(&home(h)?, t("public_key")?, t("rp_id")?, t("origin")?)?
         }
+        ["prepare-passkey-replacement", h] => {
+            let v = crate::http::strict_json(&crate::input_bytes()?)?;
+            let m = crate::http::fields(&v, &["public_key", "rp_id", "origin"], &[])?;
+            let t = |k| crate::http::text(m, k);
+            prepare_passkey_replacement(
+                &home(h)?,
+                t("public_key")?,
+                t("rp_id")?,
+                t("origin")?,
+                None,
+            )?
+        }
+        ["finish-passkey-replacement", h] => finish_passkey_replacement(&home(h)?)?,
         _ => return Ok(None),
     }))
 }

@@ -262,6 +262,9 @@ fn load_proposal(tx: &Transaction<'_>, id: &str) -> Result<(Proposal, Option<Str
 /// The gate keeps its own passkey pin, like the roles do. When the receiver state is
 /// on this host, the trust must also carry the passkey that the receiver pinned.
 fn pin_passkey(tx: &Transaction<'_>, home: &Path, t: &Trust) -> Result<()> {
+    // The gate verifies no history, so it has no count of checked receipts.
+    // It is not trusted: the receiver refuses what the passkey did not sign.
+    crate::verifier::follow_owner_passkey(tx, t, 0)?;
     pin_owner_passkey(tx, t)?;
     let receiver = home.join("receiver/state");
     if !receiver.join("state.db").exists() {
@@ -282,13 +285,8 @@ fn pin_passkey(tx: &Transaction<'_>, home: &Path, t: &Trust) -> Result<()> {
         })
         .optional()?;
     if let Some(record) = pinned {
-        let current = t
-            .owner_passkey
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?;
         check(
-            current.as_deref() == Some(record.as_str()),
+            owner_passkey_pin_record(t)?.as_deref() == Some(record.as_str()),
             "trust passkey differs from the receiver's pinned passkey",
         )?;
     }

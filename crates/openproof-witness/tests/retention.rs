@@ -63,6 +63,7 @@ fn six_weeks_of_renewals_replay_and_restored_backup_reconciliation() {
         previous_authorities: vec![],
         revoked_authorities: vec![],
         owner_passkey: None,
+        retired_owner_passkeys: vec![],
     };
     let mut count = 0;
     let mut last = None;

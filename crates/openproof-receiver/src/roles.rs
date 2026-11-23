@@ -24,6 +24,16 @@ pub fn export_verified(
 pub fn role_install(path: &Path, signed: &Signed<Trust>, root: &str, time: u64) -> Result<()> {
     let mut c = connect(path)?;
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    role_install_in(&tx, signed, root, time)?;
+    tx.commit()?;
+    Ok(())
+}
+pub(crate) fn role_install_in(
+    tx: &rusqlite::Transaction<'_>,
+    signed: &Signed<Trust>,
+    root: &str,
+    time: u64,
+) -> Result<()> {
     let (pinned, r, w): (String, Option<String>, Option<String>) = tx.query_row(
         "SELECT root,receiver,witness FROM role_anchor WHERE id=1",
         [],
@@ -51,9 +61,7 @@ pub fn role_install(path: &Path, signed: &Signed<Trust>, root: &str, time: u64) 
         "UPDATE role_anchor SET epoch=?1,trust_hash=?2,receiver=?3,witness=?4 WHERE id=1",
         params![t.epoch, hash(&canonical(t)?), t.receiver, t.witness],
     )?;
-    pin(&tx, t, time)?;
-    tx.commit()?;
-    Ok(())
+    pin(tx, t, time)
 }
 pub fn role_root(path: &Path) -> Result<Option<String>> {
     let c = connect_read(path)?;

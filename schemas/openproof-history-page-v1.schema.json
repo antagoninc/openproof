@@ -132,7 +132,8 @@
         "kind": {
           "enum": [
             "update",
-            "gap"
+            "gap",
+            "passkey"
           ]
         },
         "sequence": {

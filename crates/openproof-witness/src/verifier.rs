@@ -11,6 +11,68 @@ pub fn verifier_init(path: &Path, root: &str) -> Result<()> {
     )?;
     Ok(())
 }
+/// The owner's own states (the verifier and the gate) follow a replacement of
+/// the owner passkey: when the new trust keeps the passkeys they pinned and
+/// adds later ones, the pin moves to the whole list. The receiver and the
+/// witness never do this; there only the administrator moves the pin
+/// (`replace_owner_passkey`). A passkey can be added only when the receipt
+/// before its start is not yet verified: `checked` is the number of receipts
+/// that this state has verified. So the receiver's `passkey` receipt for it is
+/// still to come and is checked under the new trust (`replacement_receipt`).
+pub(crate) fn follow_owner_passkey(
+    tx: &rusqlite::Transaction<'_>,
+    t: &Trust,
+    checked: u64,
+) -> Result<()> {
+    let has_pin: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='owner_passkey_pin')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_pin {
+        return Ok(());
+    }
+    let pinned: Option<String> = tx
+        .query_row("SELECT record FROM owner_passkey_pin WHERE id=1", [], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    let Some(pinned) = pinned else { return Ok(()) };
+    let all: Vec<&OwnerPasskey> = owner_passkeys(t).collect();
+    let added = passkeys_added(&pinned, t)?.unwrap_or(0);
+    if added > 0 {
+        for k in &all[all.len() - added..] {
+            check(
+                k.from_sequence > checked + 1,
+                "an owner passkey was added behind the receipts already verified",
+            )?;
+        }
+        tx.execute(
+            "UPDATE owner_passkey_pin SET record=?1 WHERE id=1",
+            [owner_passkey_pin_record(t)?],
+        )?;
+    }
+    Ok(())
+}
+/// The number of receipts that a verifier state has verified: the pinned
+/// checkpoint count, or the paged progress when that is further.
+fn verified_count(tx: &rusqlite::Transaction<'_>) -> Result<u64> {
+    let pinned: u64 = tx.query_row("SELECT count FROM verifier WHERE id=1", [], |r| r.get(0))?;
+    let paged: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='stream_progress')",
+        [],
+        |r| r.get(0),
+    )?;
+    let progress: Option<u64> = if paged {
+        tx.query_row("SELECT count FROM stream_progress WHERE id=1", [], |r| {
+            r.get(0)
+        })
+        .optional()?
+    } else {
+        None
+    };
+    Ok(pinned.max(progress.unwrap_or(0)))
+}
 pub(super) fn install_signed(
     tx: &rusqlite::Transaction<'_>,
     signed: &Signed<Trust>,
@@ -37,6 +99,7 @@ pub(super) fn install_signed(
             "role migration requires a separate reviewed protocol",
         )?;
     }
+    follow_owner_passkey(tx, t, verified_count(tx)?)?;
     pin(tx, t, time)?;
     tx.execute(
         "UPDATE verifier SET receiver=?1,witness=?2 WHERE id=1",

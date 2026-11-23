@@ -67,7 +67,9 @@ func pageStep(t map[string]any, pinv, pv any, now uint64, c *chain) bool {
 		kind := str(r["kind"])
 		reason := str(r["reason"])
 		need(len(reason) <= 512)
-		if kind == "gap" {
+		if replacementReceipt(t, r) {
+			// The administrator replaced the owner passkey here.
+		} else if kind == "gap" {
 			need(str(r["document"]) == "" && num(r["document_version"]) == 0 && reason != "" && str(r["approval_sha256"]) == zero && str(r["content_sha256"]) == zero)
 			gaps = true
 		} else {
@@ -128,7 +130,9 @@ func rotationStep(hv, oldv any, root string, confirmed any, c *chain) (string, m
 	old := rootTrust(oldv, root, at)
 	nt := trust(r["new_trust"], at)
 	need(num(nt["epoch"]) > num(old["epoch"]))
-	samePasskey(old, nt)
+	// A planned handover does not replace an owner passkey.
+	need(len(ownerPasskeys(old)) == len(ownerPasskeys(nt)))
+	samePasskey(old, nt, c.Count)
 	sum := sha256.Sum256(canonical(old))
 	need(str(r["old_trust_sha256"]) == hex.EncodeToString(sum[:]))
 	nr := str(r["new_root"])
@@ -201,7 +205,7 @@ func verifyArchiveCosigned(root string, pin any, directory string, now uint64, c
 				if num(t["epoch"]) == num(current["epoch"]) {
 					need(bytes.Equal(canonical(t), canonical(current)))
 				}
-				samePasskey(current, t)
+				samePasskey(current, t, c.Count)
 			}
 			for issuer := range c.Issuers {
 				need((issuer == str(t["authority"]) || contains(t["previous_authorities"], issuer)) && !contains(t["revoked_authorities"], issuer))

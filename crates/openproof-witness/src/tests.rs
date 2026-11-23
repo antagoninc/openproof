@@ -38,6 +38,7 @@ fn setup() -> Setup {
         receiver: hex::encode(r.verifying_key().to_bytes()),
         witness: hex::encode(w.verifying_key().to_bytes()),
         owner_passkey: None,
+        retired_owner_passkeys: vec![],
     };
     Setup { dir: d, t, a, r, w }
 }
@@ -936,4 +937,246 @@ fn assessment_requires_owner_assertions_after_enrollment() {
     moved.requests[0].owner_assertion = moved.requests[1].owner_assertion.clone();
     assert!(assess(&moved, &keyed, &cp, 100).is_err());
     assert!(assess(&p, &plain, &cp, 100).is_err());
+}
+
+/// The administrator's replacement of an owner passkey: only
+/// `replace_owner_passkey` moves the pin, the receiver writes a `passkey`
+/// receipt, and the history verifies each approval against the passkey that
+/// was in force at its receipt.
+#[test]
+fn owner_passkey_replacement_is_a_receipt_and_moves_the_pin() {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64URL, Engine};
+    use p256::ecdsa::{signature::Signer, Signature, SigningKey as P256Key};
+    use sha2::{Digest, Sha256};
+    const ORIGIN: &str = "http://localhost:8765";
+    let old_key = P256Key::from_slice(&[7u8; 32]).unwrap();
+    let new_key = P256Key::from_slice(&[8u8; 32]).unwrap();
+    let assertion = |key: &P256Key, q: &Request| {
+        let challenge = B64URL.encode(hex::decode(digest(&q.approval.payload).unwrap()).unwrap());
+        let client = format!(
+            "{{\"type\":\"webauthn.get\",\"challenge\":\"{challenge}\",\"origin\":\"{ORIGIN}\"}}"
+        );
+        let mut auth = Sha256::digest(b"localhost").to_vec();
+        auth.extend_from_slice(&[0x05, 0, 0, 0, 0]);
+        let mut signed = auth.clone();
+        signed.extend_from_slice(&Sha256::digest(client.as_bytes()));
+        let signature: Signature = key.sign(&signed);
+        PasskeyAssertion {
+            authenticator_data: B64URL.encode(auth),
+            client_data_json: B64URL.encode(client),
+            signature: B64URL.encode(signature.to_der().as_bytes()),
+        }
+    };
+    let passkey = |key: &P256Key, from_sequence: u64| OwnerPasskey {
+        public_key: hex::encode(key.verifying_key().to_sec1_point(false).as_bytes()),
+        rp_id: "localhost".into(),
+        origin: ORIGIN.into(),
+        from_sequence,
+    };
+    let s = setup();
+    let root_key = SigningKey::from_bytes(&[9; 32]);
+    let root = hex::encode(root_key.verifying_key().to_bytes());
+    let (rd, wd) = (s.dir.join("receiver"), s.dir.join("witness"));
+    let rooted = |t: &Trust| sign(t.clone(), &root_key).unwrap();
+    let install = |t: &Trust, time: u64| -> Result<()> {
+        role_install(&rd, &rooted(t), &root, time)?;
+        role_install(&wd, &rooted(t), &root, time)
+    };
+    role_pin(&rd, &root).unwrap();
+    role_pin(&wd, &root).unwrap();
+
+    // Sequence 1 without a passkey, sequence 2 with the first passkey.
+    let plain = s.t.clone();
+    install(&plain, 100).unwrap();
+    // Without a pinned passkey there is nothing to replace.
+    let mut early = plain.clone();
+    early.epoch = 2;
+    early.owner_passkey = Some(passkey(&new_key, 2));
+    assert!(replace_owner_passkey(&rd, &rooted(&early), &root, Some(&s.r), 100).is_err());
+    let r1 = apply(&rd, &request(&s, 1, 0), &plain, &s.r, 100).unwrap();
+    witness(&wd, &r1, &plain, &s.w, 100).unwrap();
+    let mut first = plain.clone();
+    first.epoch = 2;
+    first.owner_passkey = Some(passkey(&old_key, 2));
+    install(&first, 100).unwrap();
+    let mut q2 = request(&s, 2, 1);
+    q2.owner_assertion = Some(assertion(&old_key, &q2));
+    let r2 = apply(&rd, &q2, &first, &s.r, 100).unwrap();
+    let cp2 = witness(&wd, &r2, &first, &s.w, 100).unwrap();
+    let p2 = export(&rd, cp2.clone()).unwrap();
+
+    // The replacement trust: the first passkey retired, the new one from sequence 4,
+    // right after the replacement receipt at sequence 3.
+    let mut second = first.clone();
+    second.epoch = 3;
+    second.retired_owner_passkeys = vec![passkey(&old_key, 2)];
+    second.owner_passkey = Some(passkey(&new_key, 4));
+
+    // A root signature alone does not replace the passkey.
+    let e = install(&second, 100).unwrap_err().to_string();
+    assert!(e.contains("replacement"), "{e}");
+    // Refused replacements: the old passkey dropped, the old passkey changed, a
+    // start that is not right after the receipt, the wrong root, the wrong signer.
+    let refused = |change: &dyn Fn(&mut Trust)| {
+        let mut t = second.clone();
+        change(&mut t);
+        // A trust that is not valid cannot be signed at all.
+        if let Ok(signed) = sign(t, &root_key) {
+            assert!(replace_owner_passkey(&rd, &signed, &root, Some(&s.r), 100).is_err());
+        }
+    };
+    refused(&|t| t.retired_owner_passkeys.clear());
+    refused(&|t| t.retired_owner_passkeys[0].origin = "http://localhost:9999".into());
+    refused(&|t| t.retired_owner_passkeys[0].from_sequence = 1);
+    refused(&|t| t.owner_passkey.as_mut().unwrap().from_sequence = 3);
+    refused(&|t| t.owner_passkey.as_mut().unwrap().from_sequence = 5);
+    refused(&|t| t.owner_passkey = None);
+    refused(&|t| t.epoch = 2);
+    let forged = sign(second.clone(), &s.a).unwrap();
+    assert!(replace_owner_passkey(&rd, &forged, &root, Some(&s.r), 100).is_err());
+    assert!(replace_owner_passkey(&rd, &rooted(&second), &root, Some(&s.w), 100).is_err());
+    // Nothing above changed the state: the first passkey still admits.
+    assert_eq!(head(&rd).unwrap(), 2);
+    assert_eq!(
+        canonical(&apply(&rd, &q2, &first, &s.r, 100).unwrap()).unwrap(),
+        canonical(&r2).unwrap()
+    );
+
+    // The replacement.
+    let r3 = replace_owner_passkey(&rd, &rooted(&second), &root, Some(&s.r), 105)
+        .unwrap()
+        .unwrap();
+    let x = &r3.payload;
+    assert_eq!((x.kind.as_str(), x.sequence), ("passkey", 3));
+    assert_eq!(
+        x.content_sha256,
+        passkey_hash(second.owner_passkey.as_ref().unwrap()).unwrap()
+    );
+    assert!(
+        replace_owner_passkey(&wd, &rooted(&second), &root, None, 105)
+            .unwrap()
+            .is_none()
+    );
+    let cp3 = witness(&wd, &r3, &second, &s.w, 105).unwrap();
+    // A history that ends with the replacement receipt: the receipt must carry
+    // the hash of the passkey that the trust starts after it.
+    let p3 = export(&rd, cp3.clone()).unwrap();
+    assess(&p3, &second, &cp3, 105).unwrap();
+    let mut other = second.clone();
+    other.owner_passkey = Some(passkey(&old_key, 4));
+    assert!(assess(&p3, &other, &cp3, 105).is_err());
+    // The same replacement a second time is refused.
+    assert!(replace_owner_passkey(&rd, &rooted(&second), &root, Some(&s.r), 106).is_err());
+
+    // After it: the old passkey no longer approves, the old trust is refused,
+    // and a retry of the old approval returns its first receipt and changes nothing.
+    let mut q4 = request(&s, 4, 2);
+    q4.owner_assertion = Some(assertion(&old_key, &q4));
+    assert!(apply(&rd, &q4, &second, &s.r, 106).is_err());
+    assert!(apply(&rd, &q4, &first, &s.r, 106).is_err());
+    assert_eq!(
+        canonical(&apply(&rd, &q2, &second, &s.r, 106).unwrap()).unwrap(),
+        canonical(&r2).unwrap()
+    );
+    let bare = request(&s, 4, 2);
+    assert!(apply(&rd, &bare, &second, &s.r, 106).is_err());
+    q4.owner_assertion = Some(assertion(&new_key, &q4));
+    let r4 = apply(&rd, &q4, &second, &s.r, 106).unwrap();
+    assert_eq!(r4.payload.sequence, 4);
+    let cp = witness(&wd, &r4, &second, &s.w, 106).unwrap();
+
+    // The pin now holds both passkeys: a later trust keeps them as they are.
+    let mut renewed = second.clone();
+    renewed.epoch = 4;
+    install(&renewed, 107).unwrap();
+    for change in [
+        (|t: &mut Trust| t.retired_owner_passkeys.clear()) as fn(&mut Trust),
+        |t| t.owner_passkey = t.retired_owner_passkeys.pop(),
+        |t| t.retired_owner_passkeys[0].from_sequence = 1,
+    ] {
+        let mut t = renewed.clone();
+        t.epoch = 5;
+        change(&mut t);
+        assert!(install(&t, 108).is_err());
+    }
+
+    // The history verifies under the trust with both passkeys, and only so.
+    let p = export(&rd, cp.clone()).unwrap();
+    assert_eq!(p.receipts.len(), 4);
+    assess(&p, &renewed, &cp, 110).unwrap();
+    let wrong = |change: &dyn Fn(&mut Trust)| {
+        let mut t = renewed.clone();
+        change(&mut t);
+        assert!(assess(&p, &t, &cp, 110).is_err());
+    };
+    wrong(&|t| t.retired_owner_passkeys.clear());
+    wrong(&|t| t.owner_passkey.as_mut().unwrap().from_sequence = 5);
+    wrong(&|t| t.owner_passkey.as_mut().unwrap().origin = "http://localhost:9999".into());
+    wrong(&|t| t.retired_owner_passkeys[0].from_sequence = 3);
+    wrong(&|t| {
+        t.retired_owner_passkeys.clear();
+        t.owner_passkey.as_mut().unwrap().from_sequence = 2
+    });
+    let mut swapped = p.clone();
+    let (a, b) = (
+        swapped.requests[1].owner_assertion.clone(),
+        swapped.requests[2].owner_assertion.clone(),
+    );
+    swapped.requests[1].owner_assertion = b;
+    swapped.requests[2].owner_assertion = a;
+    assert!(assess(&swapped, &renewed, &cp, 110).is_err());
+
+    // The owner's verifier follows the replacement without the administrator,
+    // but only for a passkey whose `passkey` receipt it has not yet verified.
+    let vd = s.dir.join("verifier");
+    verifier_init(&vd, &root).unwrap();
+    verify_trusted(&vd, &rooted(&first), &cp2, &p2, 110).unwrap();
+    let mut behind = renewed.clone();
+    behind.epoch = 6;
+    behind.owner_passkey.as_mut().unwrap().from_sequence = 3;
+    let e = verifier_install(&vd, &rooted(&behind), 110).unwrap_err();
+    assert!(e.to_string().contains("already verified"), "{e}");
+    let mut dropped = renewed.clone();
+    dropped.owner_passkey = dropped.retired_owner_passkeys.pop();
+    dropped.owner_passkey.as_mut().unwrap().from_sequence = 3;
+    assert!(verifier_install(&vd, &rooted(&dropped), 110).is_err());
+    verify_trusted(&vd, &rooted(&renewed), &cp, &p, 110).unwrap();
+    // After that the verifier's pin holds both passkeys, like the receiver's.
+    let mut back = first.clone();
+    back.epoch = 7;
+    assert!(verifier_install(&vd, &rooted(&back), 110).is_err());
+
+    // The receiver takes one new passkey at a time. The witness follows the
+    // receiver, also when it is two replacements behind.
+    let third_key = P256Key::from_slice(&[10u8; 32]).unwrap();
+    let fourth_key = P256Key::from_slice(&[11u8; 32]).unwrap();
+    let mut third = renewed.clone();
+    third.epoch = 8;
+    third.retired_owner_passkeys.push(passkey(&new_key, 4));
+    third.owner_passkey = Some(passkey(&third_key, 6));
+    let mut fourth = third.clone();
+    fourth.epoch = 9;
+    fourth.retired_owner_passkeys.push(passkey(&third_key, 6));
+    fourth.owner_passkey = Some(passkey(&fourth_key, 7));
+    assert!(replace_owner_passkey(&rd, &rooted(&fourth), &root, Some(&s.r), 111).is_err());
+    // Two new passkeys at once are refused also when the last one starts right
+    // after the receipt: the one between them would have no receipt.
+    let mut double = renewed.clone();
+    double.epoch = 8;
+    double.retired_owner_passkeys = vec![
+        passkey(&old_key, 2),
+        passkey(&new_key, 4),
+        passkey(&third_key, 5),
+    ];
+    double.owner_passkey = Some(passkey(&fourth_key, 6));
+    assert!(replace_owner_passkey(&rd, &rooted(&double), &root, Some(&s.r), 111).is_err());
+    for (t, sequence) in [(&third, 5), (&fourth, 6)] {
+        let r = replace_owner_passkey(&rd, &rooted(t), &root, Some(&s.r), 111)
+            .unwrap()
+            .unwrap();
+        assert_eq!(r.payload.sequence, sequence);
+    }
+    replace_owner_passkey(&wd, &rooted(&fourth), &root, None, 112).unwrap();
+    assert!(replace_owner_passkey(&wd, &rooted(&third), &root, None, 112).is_err());
+    assert!(replace_owner_passkey(&wd, &rooted(&fourth), &root, None, 112).is_err());
 }

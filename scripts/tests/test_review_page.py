@@ -6,7 +6,7 @@ asserted in crates/openproof-witness/src/gate_tests.rs) and check that every
 single difference between the approval and the shown change is refused.
 """
 
-import json, os, shutil, subprocess, unittest
+import base64, json, os, shutil, subprocess, sys, unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -112,6 +112,84 @@ class ReviewPageTests(unittest.TestCase):
             self.assertTrue(r["error"].startswith("The approval"), (c, r))
         # The control: the unchanged case passes in the same run.
         self.assertTrue(self.run_cases([self.case()])[0]["ok"])
+
+    def test_passkey_code_matches_the_administrators_tool(self):
+        """The set-up page and scripts/roles_passkey.py compute the same code
+        for a passkey. The code changes with the key, the relying party and
+        the origin. The page refuses a key that is not a P-256 key as an
+        authenticator returns it."""
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import serialization
+
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from roles_passkey import code
+
+        def b64(raw):
+            return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+        keys = [ec.generate_private_key(ec.SECP256R1()).public_key() for _ in range(3)]
+        der = [
+            k.public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            for k in keys
+        ]
+        points = [
+            k.public_bytes(
+                serialization.Encoding.X962,
+                serialization.PublicFormat.UncompressedPoint,
+            )
+            for k in keys
+        ]
+        other = (
+            ec.generate_private_key(ec.SECP384R1())
+            .public_key()
+            .public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
+        script = """
+import { passkeyCode } from %s;
+const out = [];
+for (const [k, rp, origin] of JSON.parse(process.argv[1])) {
+  try { out.push(await passkeyCode(k, rp, origin)); } catch (e) { out.push(null); }
+}
+console.log(JSON.stringify(out));
+""" % json.dumps((ROOT / "app/common.js").as_uri())
+        here = ("localhost", "http://localhost:8765")
+        inputs = [(b64(d), *here) for d in der]
+        inputs += [
+            (b64(der[0]), "localhost", "http://localhost:4444"),
+            (b64(der[0]), "example.org", "http://localhost:8765"),
+            (b64(points[0]), *here),
+            (b64(other), *here),
+            (b64(der[0][:-1]), *here),
+        ]
+        r = subprocess.run(
+            [node(), "--input-type=module", "-e", script, json.dumps(inputs)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        got = json.loads(r.stdout)
+
+        def record(point, rp, origin):
+            return dict(public_key=point.hex(), rp_id=rp, origin=origin)
+
+        self.assertEqual(got[:3], [code(record(p, *here)) for p in points])
+        self.assertEqual(
+            got[3:5],
+            [
+                code(record(points[0], "localhost", "http://localhost:4444")),
+                code(record(points[0], "example.org", "http://localhost:8765")),
+            ],
+        )
+        self.assertRegex(got[0], r"^([0-9A-F]{4}-){4}[0-9A-F]{4}$")
+        self.assertEqual(len(set(got[:5])), 5)
+        self.assertEqual(got[5:], [None, None, None])
 
     def test_pages_load_no_dashboard_code(self):
         """The trusted pages import only the shared modules."""

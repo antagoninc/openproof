@@ -165,3 +165,78 @@ func TestPasskeyConfiguration(t *testing.T) {
 		}
 	}
 }
+
+// A replaced passkey: the trust lists the retired one, each assertion is checked
+// against the passkey in force at its receipt, and a later trust in an archive
+// keeps the list and adds only passkeys whose `passkey` receipt is still to come.
+func TestPasskeyReplacement(t *testing.T) {
+	old, next := testKey(t), testKey(t)
+	record := func(k *ecdsa.PrivateKey, from int) map[string]any {
+		return obj(testTrust(k, from)["owner_passkey"])
+	}
+	replaced := map[string]any{"retired_owner_passkeys": []any{record(old, 2)}, "owner_passkey": record(next, 5)}
+	signedBy := func(k *ecdsa.PrivateKey) map[string]any {
+		return map[string]any{"owner_assertion": testAssertion(t, k, goodParts())}
+	}
+	for _, c := range []struct {
+		name     string
+		q        map[string]any
+		sequence uint64
+		want     bool
+	}{
+		{"none before the first passkey", map[string]any{}, 1, true},
+		{"old passkey in its range", signedBy(old), 3, true},
+		{"new passkey in the old range", signedBy(next), 3, false},
+		{"new passkey after the replacement", signedBy(next), 5, true},
+		{"old passkey after the replacement", signedBy(old), 5, false},
+		{"none after the replacement", map[string]any{}, 6, false},
+	} {
+		if accepts(c.q, replaced, c.sequence) != c.want {
+			t.Fatalf("%s: want %v", c.name, c.want)
+		}
+	}
+	receipt := func(kind string, sequence int, k map[string]any) map[string]any {
+		text := fmt.Sprintf(`{"kind":"%s","sequence":%d,"document":"","document_version":0,"reason":"","approval_sha256":"%s","content_sha256":"%s"}`, kind, sequence, zero, hash(string(canonical(k))))
+		return obj(parse([]byte(text)))
+	}
+	is := func(r map[string]any) (replaced_ bool, ok bool) {
+		defer func() { ok = recover() == nil }()
+		return replacementReceipt(replaced, r), true
+	}
+	if r, ok := is(receipt("passkey", 4, record(next, 5))); !ok || !r {
+		t.Fatal("the replacement receipt was refused")
+	}
+	if r, ok := is(receipt("update", 3, record(next, 5))); !ok || r {
+		t.Fatal("an update was taken for a replacement")
+	}
+	for name, r := range map[string]map[string]any{
+		"another passkey":             receipt("passkey", 4, record(old, 5)),
+		"no receipt at the start":     receipt("update", 4, record(next, 5)),
+		"a receipt without a start":   receipt("passkey", 3, record(next, 5)),
+		"a receipt for the first one": receipt("passkey", 1, record(old, 2)),
+	} {
+		if _, ok := is(r); ok {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+	same := func(a, b map[string]any, count uint64) (ok bool) {
+		defer func() { ok = recover() == nil }()
+		samePasskey(a, b, count)
+		return true
+	}
+	first := map[string]any{"owner_passkey": record(old, 2)}
+	none := map[string]any{}
+	if !same(none, first, 9) || !same(first, first, 9) || !same(first, replaced, 3) || !same(replaced, replaced, 9) {
+		t.Fatal("a kept or correctly extended passkey list was refused")
+	}
+	if same(first, none, 3) || same(replaced, first, 3) {
+		t.Fatal("a dropped passkey was accepted")
+	}
+	if same(first, map[string]any{"owner_passkey": record(next, 5)}, 3) {
+		t.Fatal("a replaced passkey without the retired one was accepted")
+	}
+	// The receipt before the new passkey's start (sequence 4) is already checked.
+	if same(first, replaced, 4) {
+		t.Fatal("a passkey was added behind the receipts that were already checked")
+	}
+}

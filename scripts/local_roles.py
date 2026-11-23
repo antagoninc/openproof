@@ -49,7 +49,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Records this script can still uninstall: version 1 used loopback mTLS,
 # version 2 had no protected files, and version 3 had the status check in
 # this file.
-UNINSTALLABLE = {"openproof-local-roles/" + n for n in "123"} | {VERSION}
+UNINSTALLABLE = {"openproof-local-roles/" + n for n in "1234"} | {VERSION}
 # The only code the role services run: one root-owned copy of this binary.
 BINARY = "target/debug/openproof-role"
 MAC = platform.system() == "Darwin"
@@ -351,13 +351,16 @@ def install_code(base):
         )
     code.mkdir(mode=0o755)
     shutil.copy2(src, code / "openproof-role")
-    # A root-owned copy of the status check, so that it runs from code the
-    # owner account cannot change (docs/LOCAL-ROLES.md).
-    shutil.copy2(Path(__file__).resolve().parent / "roles_status.py", code)
+    # Root-owned copies of the status check and of the tool that replaces the
+    # owner passkey, so that they run from code the owner account cannot
+    # change (docs/LOCAL-ROLES.md, docs/PASSKEY.md).
+    for name in ("roles_status.py", "roles_passkey.py"):
+        shutil.copy2(Path(__file__).resolve().parent / name, code)
     for p, mode in [
         (code, 0o755),
         (code / "openproof-role", 0o755),
         (code / "roles_status.py", 0o644),
+        (code / "roles_passkey.py", 0o644),
     ]:
         os.chown(p, 0, 0)
         os.chmod(p, mode)

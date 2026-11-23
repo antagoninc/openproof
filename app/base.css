@@ -108,6 +108,17 @@ svg {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
+/* The passkey set-up page: the code of a new passkey, and the administrator's command. */
+.passkey-code {
+  font: 600 1.35rem/1.5 var(--mono);
+  letter-spacing: 0.04em;
+  margin: 0.75rem 0;
+}
+.command {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0 0 1rem;
+}
 .sub {
   color: var(--ink-2);
   font-size: 14px;

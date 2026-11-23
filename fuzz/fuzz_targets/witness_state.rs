@@ -13,7 +13,7 @@ fuzz_target!(|data:&[u8]| {
  let receiver=path.join("receiver");let witness_path=path.join("witness");let verifier=path.join("verifier");init(&receiver).unwrap();init(&witness_path).unwrap();
  let authority=SigningKey::from_bytes(&[1;32]);let rk=SigningKey::from_bytes(&[2;32]);let wk=SigningKey::from_bytes(&[3;32]);let root=SigningKey::from_bytes(&[4;32]);
  let public=|k:&SigningKey| k.verifying_key().to_bytes().iter().map(|b|format!("{b:02x}")).collect::<String>();
- let t=Trust{version:V.into(),epoch:1,expires_at:1000,authority:public(&authority),receiver:public(&rk),witness:public(&wk),previous_authorities:vec![],revoked_authorities:vec![],owner_passkey:None};
+ let t=Trust{version:V.into(),epoch:1,expires_at:1000,authority:public(&authority),receiver:public(&rk),witness:public(&wk),previous_authorities:vec![],revoked_authorities:vec![],owner_passkey:None,retired_owner_passkeys:vec![]};
  verifier_init(&verifier,&public(&root)).unwrap();let signed=sign(t.clone(),&root).unwrap();enable_pages(&receiver,&t,100).unwrap();let mut count=0u64;let mut latest=None;let mut last_request:Option<Request>=None;
  for byte in data.iter().take(32) {
   match byte%8 {

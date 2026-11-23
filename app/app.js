@@ -326,7 +326,8 @@ async function refresh() {
     : s.passkey.available
       ? "Approvals are signed with a key file on this computer. Set up a passkey so every approval also needs your fingerprint, face or device PIN."
       : "Passkeys need the localhost address. Open the app at its localhost link.";
-  $("passkey-setup").hidden = s.passkey.configured || !s.passkey.available;
+  $("passkey-setup").hidden = !s.passkey.available;
+  $("passkey-setup").textContent = s.passkey.configured ? "Replace passkey" : "Set up passkey";
   $("passkey-setup").disabled = s.paused;
 }
 
