@@ -1,90 +1,264 @@
-# OpenProof v0.1 threat model
+# Threat model
 
-## Overview
+This file is for version 0.9.0 and the trusted code that [TCB.md](TCB.md)
+lists. It replaces the threat models of versions 0.1 to 0.5. Those described
+code that is no longer on the main path; they are in the git history of this
+file.
 
-Scope is the local Cargo workspace. User requirements: independently authored execution assurance, no proprietary Antagon material, all project artifacts local on the Desktop, and no publication without explicit approval. This is a design model, not a vulnerability audit or proof of security. A separate read-only architecture pass reviewed the two crates; the author reconciled its observations with the implementation.
+This is a design model. It is not an audit and it is not a proof. No human
+security review has been done
+([handoff/REVIEW-BRIEF.md](handoff/REVIEW-BRIEF.md)). This file adds no
+guarantee. The guarantees are G1, G2 and G3 in the [README](../README.md),
+each with its condition. This file says who can attack what, what stops them,
+and what does not stop them.
 
-| Component | Flow and inspected source |
+## What is protected
+
+| Asset | Guarantee | Condition |
+|---|---|---|
+| The receiver's documents, and the protected files made from them | G1: a document changes only for the exact content, version and receiver that the owner approved, once, before the approval expires | An owner passkey is set up, and the receiver runs under its own account |
+| The history of receipts | G2: every executed change is in the witness's signed, ordered history; omission, reordering or a fork is detected against a trusted checkpoint | The witness is run by a party other than the receiver. **This version has no supported way to meet it:** the role services run on the owner's computer only |
+| A third party's result for an exported history | G3: anyone can verify an exported history offline with the separate Go verifier, given the trusted root and a current checkpoint | The verifier and root are obtained independently of the archive |
+
+Not protected:
+
+- **Secrecy of document content.** OpenProof does not encrypt content. The
+  receiver stores each request with its content, an export holds those
+  requests, and every local account can read a protected file.
+- **Availability.** Code in the owner's account can block, delay or drop
+  every request. OpenProof then does nothing; it does not do the wrong thing.
+- **The truth of what a document says, or an effect outside the receiver.** A
+  receipt is the receiver's signed statement about its own stored document.
+
+## The parts
+
+| Part | Runs as | Holds | Trusted for |
+|---|---|---|---|
+| Agent and its tools (`openproof-witness mcp`) | The owner's account | Nothing secret | Nothing. It can propose, and it can ask to execute approved work. It cannot approve |
+| Owner app server, broker, approval gate | The owner's account | Authority key, root key, proposals | Nothing under G1's condition, except the origin and page tables ([TCB.md](TCB.md)) |
+| Review page and passkey set-up page | The owner's browser, on the review origin | Its own copy of the proposal that it shows | What the owner sees, and what the passkey signs |
+| Authenticator (for example Touch ID) | The platform | The passkey's private key | A signature only after a user-verified gesture |
+| Receiver service (`openproof-role serve`) | The receiver's account | Receiver key, documents, used nonces, the pinned trust | G1; the receipts for G2 |
+| Witness service (`openproof-role serve`) | The witness's account | Witness key, the ordered history | G2 |
+| Status check (`roles_status.py`) | The owner or the administrator, from a root-owned copy | Nothing | The report that G1's condition holds |
+| Go verifier | The party that verifies | The trusted root, a checkpoint, the current time | G3 |
+| Cosigning witnesses (optional) | Other operators | Their own keys | That one history exists for each tree size ([WITNESS-NETWORK.md](WITNESS-NETWORK.md)) |
+| Administrator, root | — | Everything | Fully trusted. See "Out of scope" |
+
+## Attackers
+
+**A. Code in the owner's account.** This is the main case: an AI agent, or
+code that an agent was made to run. It can read and change every file of the
+owner, the authority key and the root key included. It can run the owner's
+programs, send any bytes to the role services, open local ports, and change
+what the owner's terminal shows. Under G1's condition it cannot read or change
+a role's key or state, it cannot change the root-owned role code, and it
+cannot make the authenticator sign.
+
+**B. Another local account** that is not the owner and not root. It can read
+protected files. It can try to connect to local ports and to the role
+sockets.
+
+**C. A web page** that the owner's browser has open. It can send requests to
+local ports. It cannot read the answers of another origin.
+
+**D. Whoever makes or carries an exported archive.** They can change, cut,
+reorder or add anything in it, and they can put their own verifier or root
+beside it.
+
+**E. The operator of the witness,** when that is also the operator of the
+receiver. They hold both keys and can sign a different history.
+
+**F. The network.** No OpenProof service listens outside the computer. Only
+the optional witness submitter talks to other hosts.
+
+## Boundaries and controls
+
+### 1. The owner's account to the receiver service
+
+Attacker A sends requests on the receiver's Unix socket.
+
+| Control | Where |
 |---|---|
-| Typed evidence | Authorization, action, receipt, and bundle: `crates/openproof-core/src/lib.rs:29`, `:36`, `:49`, `:63`, `:78` |
-| Verifier-owned context | External keys, expected scope, run identity, and time: `crates/openproof-core/src/lib.rs:86` |
-| Encoding and signing | Typed parse → canonical bytes → domain prefix → signature/digest: `crates/openproof-core/src/lib.rs:112`, `:139`, `:251`, `:257`, `:260` |
-| Verification | Strict signatures and full chain/context checks: `crates/openproof-core/src/lib.rs:264`, `:270` |
-| Local CLI | Argument dispatch, bounded file input, new-file output: `crates/openproof-cli/src/main.rs:11`, `:21`, `:56` |
+| The service answers only the accounts it was started for (the owner and root), by the user ID that the kernel reports for the connection | `openproof-role`: `peer_uid` |
+| One length-prefixed message for each connection, at most 1 MiB; JSON without duplicate keys or floats; a fixed set of operations for each role | `http.rs`: `read_message`, `strict_json`; `openproof-role`: `dispatch` |
+| A change is admitted only with a signature of an active authority over the exact document, expected version, content hash, receiver, nonce and time window | `validate_request`, `apply_inner` |
+| The content must have the approved hash and be at most 8,192 bytes | `validate_request` |
+| With a passkey in the trust, every new admission needs a user-verified assertion from that passkey over the approval's digest, from the registered origin | `passkey.rs`: `admit_owner_assertion`, `verify_assertion` |
+| A nonce is used once. A retry of the same approval returns the first receipt and changes nothing. The same nonce with another approval is refused | `apply_inner` (`consumed`) |
+| The document must be at the expected version | `apply_inner` |
+| The change, the receipt and the used nonce are one database transaction | `apply_inner` |
+| The trust that the service admits under is installed only with the root's signature. A later trust cannot have a lower epoch, cannot remove or replace the passkey, and cannot change the role keys. The signing clock does not go back | `roles.rs`: `role_install`; `pin`; `pin_owner_passkey`; `clock.rs` |
 
-The authority signs scope; the actor signs a claim bound to it; an optional distinct-key executor signs a reported outcome bound to the claim. No actual executor or external service is part of this version.
+What attacker A can still do here: read the root key in the owner home and
+install a trust with another authority key. The receiver still requires the
+passkey assertion, so no change is admitted. A can also stop all work.
 
-| Deployment or workflow | Resource or capability | Configuration and precedence | Safe effective value or location | Readers, writers, or recipients | Enforcing control | Evidence or unknowns |
-|---|---|---|---|---|---|---|
-| Local key generation | Secret seed and public key files | Explicit CLI paths; relative to current directory | User-selected local files | Operator and host principals permitted by filesystem | New files only; secret mode 0600 on Unix; no non-Unix secret creation | CLI `write`, line 21; pair creation is not transactional |
-| Local signing | Existing hex secret seed | Explicit seed file argument | User-selected local file, decoded into process memory | Signing process | Bounded read; 32-byte decoded key; individual payload validation | CLI `key`, line 41; no ownership/mode check or guaranteed full memory erasure |
-| Offline verification | Bundle and trusted context | Two explicit input paths, no fallback or environment override | User-selected local files | Verifier process; report on stdout | Bounded typed parsing; external keys and expected scope | CLI `run`, line 56; context provenance is caller responsibility |
-| Canonical/digest export | Signing bytes / digest | Explicit kind and payload file | New output file / stdout | Operator | Typed evidence validation and domain separation | Core `signing_bytes`, line 251 |
-| Synthetic demo | Public synthetic evidence and context | Explicit new directory | bundle.json, context.json, report.json | Operator | Fresh directory; in-memory generated keys discarded | CLI `demo`, line 70; no real execution |
-| Library integration | In-memory evidence and policy inputs | Explicit function arguments | Caller process | Calling application | Library parse size cap; output-size check after canonicalization allocation | Core lines 112, 139, 270; no universal allocation cap or process sandbox |
+Without a passkey, A reads the authority key and signs approvals. Without
+separate role accounts, A changes the receiver's state directly. G1's
+condition names both.
 
-## Threat Model, Trust Boundaries, and Assumptions
+### 2. The owner app's server to the review page
 
-Assets: signing-key secrecy, authenticity of scoped authorization, integrity of evidence links, correct interpretation of assurance, and local output integrity. The adversary may craft, alter, reorder, truncate, splice, omit, or replay bundle bytes and may hold its own unrelated signing keys. It does not initially control trusted context, valid role private keys, the verifier binary, or the operator's account.
+The owner must see what the passkey signs. The authenticator shows no
+content, and the server is not trusted.
 
-Boundary 1: untrusted bytes → typed objects. Unknown/duplicate fields, malformed JSON, unsupported versions, invalid evidence text, noncanonical hex, and invalid keys must fail. The CLI bounds reads; library callers should use typed `parse`, not a permissive Value parser that discards duplicates first.
+| Control | Where |
+|---|---|
+| The review page keeps its own copy of the proposal that it shows. Before a passkey prompt it checks the signed approval against that copy: document, version, the content hash that it computes itself, and a window of at most 10 minutes that is valid now | `app/approval.js`, `app/review.js` |
+| The page computes the approval digest itself and uses it as the passkey challenge. The server never chooses the challenge | `app/approval.js` |
+| The review origin serves only the review page, the set-up page, their modules and their requests. The workspace runs on a second origin. An assertion obtained on the workspace origin carries that origin, and the gate and the receiver refuse it | `owner_app.rs`, `TCB:` regions; `verify_assertion` (origin) |
+| Pages load scripts and styles only from their own origin, start no workers, cannot be put in a frame and have no form target; `Cross-Origin-Opener-Policy: same-origin` | `owner_app.rs`: `CSP` |
+| Text from an agent or a document is shown as text, never as HTML or script | `app/common.js`, `app/review.js` |
 
-Boundary 2: statements → verifier decisions. The verifier chooses trust keys and expected action independently. Authorization must match exact run/nonce/audience/policy/action, action must reference that authorization, and receipt must reference that action. An embedded arbitrary key is never sufficient authority. The signed actor key must match the external actor key.
+Limits: the page's line diff compares against the current text that the
+server reports, which the page cannot check, and the page says so. Code that
+controls the browser itself, or the owner's whole account at the moment of
+approval, can change what the screen shows.
 
-Boundary 3: signature → assurance interpretation. A successful signature verifies a statement, not its truth. A receipt requires a key different from actor and authority, but that does not establish different operators, honest observation, trusted hardware, or actual effects. Receipt removal lowers assurance; consumers must reject lower levels if receipts are mandatory. Output hashes are signed assertions, not checked artifacts.
+### 3. Other accounts and web pages to the owner app
 
-Boundary 4: CLI → local filesystem. The caller already has local filesystem authority and chooses paths. There is no remote user or directory confinement. New-file creation prevents overwrites; parent-directory trust and filesystem permissions remain host responsibilities. Multi-file generation may leave partial outputs on failure.
+| Control | Where |
+|---|---|
+| The owner app listens only on 127.0.0.1 | `owner_app.rs` |
+| A write needs the owner's session, the right `Host`, a same-origin request and an anti-forgery header | `owner_app.rs` |
+| The role sockets are in folders that only the role account can change, and the services refuse a peer that is not the owner or root | `roles_status.py`: `socket_folder_protected`; `peer_uid` |
 
-Assumptions and exclusions: verifier context is authentic, clock is supplied honestly, role keys are provisioned securely, and integrators hash the intended exact policy/argument bytes. No persistent replay state, revocation service, policy engine, execution broker, hardware attestation, trusted timestamp, external-effect witness, or model correctness evaluator exists. Authority and actor separation is not required. Verifying the same context again succeeds. Expired evidence cannot be verified in an archival mode. No network/runtime publication path exists; build dependency installation is separate and may use the registry.
+Limits: browsers do not scope cookies by port, so the session cookie also
+goes to other local web servers on `localhost`. That exposes the session, not
+approvals, which need the passkey. Another local program can serve its own
+page at the review origin's address while the owner app is not running, and
+ask for an assertion there. Confirm only a passkey prompt that you started
+from the owner app ([PASSKEY.md](PASSKEY.md)).
 
-## Attack Surface, Mitigations, and Attacker Stories
+### 4. The receiver to the witness
 
-These are design scenarios and residual risks, not confirmed vulnerability findings.
+| Control | Where |
+|---|---|
+| The witness adds a receipt only with the receiver's signature, at the next sequence number, with the hash of the event before it. The same sequence number with another receipt is refused | `witness` in `openproof-receiver/src/lib.rs` |
+| The witness signs a checkpoint over the count and the head of its history | `witness`, `current_checkpoint` |
+| The history is also an RFC 6962 tree with C2SP checkpoints, which other witnesses can cosign | `tlog.rs`; [WITNESS-NETWORK.md](WITNESS-NETWORK.md) |
 
-| Priority | Scenario and capability gain | Prerequisites | Impact | Existing controls | Mitigation | Evidence |
-|---|---|---|---|---|---|---|
-| High | Substitute action/resource/argument scope | Untrusted bundle control | Accept unauthorized scope | Exact expected action and chained digests | Preserve these invariants; adversarial tests | Core `verify`, line 270 |
-| High | Forge a trusted actor or authority | Attacker has own keys, not trusted keys | False authorization | Externally pinned keys, strict verification, weak-key rejection | Review key distribution and revocation before deployment | Core `public_key`, line 210; `verify_signature`, line 264 |
-| High | Replace verifier context with attacker keys/scope | Deployment accepts producer-controlled context | Vacuous verification | Library labels context trusted; CLI makes no provenance assertion | Provision context through a trusted independent channel | Core `Context`, line 86; CLI `run`, line 56 |
-| High | Interpret a self-report as proof of effects | Consumer ignores assurance semantics | Unsafe downstream decisions | Distinct assurance values; effects flag always false | Require independently witnessed effects in a future adapter | Core `Report`, line 105; `verify`, line 270 |
-| High | Replay valid evidence for another dispatch | Integrator treats verification as a single-use execution gate | Duplicate effects | Wrong context rejected; same-context replay deliberately allowed | Atomic durable nonce consumption and dispatch broker before enforcement use | Core `verify`, line 270 |
-| Medium | Alternate encoding changes signed meaning | Crafted JSON or cross-language implementation disagreement | Signature/content ambiguity | Typed parsing, deterministic length framing, fixed domain/version | Independent implementation, fuzzing, schema conformance | Core lines 112, 139, 251 |
-| Medium | Exhaust resources with malformed input | Access to library or CLI input | Local denial of service | 1 MiB file/parser bound and default JSON recursion limit | Add service-level budgets if exposed remotely; fuzz parser | CLI `read`, line 11; core `parse`, line 112 |
-| Medium | Steal seed from host/file/memory | Host access or unsafe key provisioning | Sign as trusted role | Unix 0600 on creation; no key stdout | Use secure key storage before production; avoid secret-bearing logs | CLI `write`, line 21; `key`, line 41 |
-| Low | Generate partial output on disk/full or second-file conflict | Local I/O failure | Operational confusion | No existing files overwritten; errors returned | Inspect output state; transactional generation is future work | CLI `write`, line 21 |
+Limit: this is attacker E. When one operator holds the receiver and the
+witness, these checks show mistakes, not dishonesty. Separate role accounts
+keep the witness key from the owner's account. They do not make the witness
+independent: one administrator controls both accounts. OpenProof's log is not
+on a public witness list today.
 
-## Severity Calibration (Critical, High, Medium, Low)
+### 5. An exported archive to the Go verifier
 
-Critical would require broad unauthorized privileged execution across a deployed enforcement boundary. No such execution service exists here, so a critical remote-execution claim is unsupported by this architecture alone.
+Attacker D gives a third party an archive.
 
-High examples: accepting attacker-signed authorization as a pinned authority, accepting a different action under valid authorization, or an integration performing privileged actions from producer-controlled context. A compromised trusted signer or dishonest receipt producer is a stated trust failure, not evidence of a cryptographic bypass.
+| Control | Where |
+|---|---|
+| The verifier takes the trusted root, a checkpoint and the current time as its own arguments, not from the archive | `reference/go-witness/main.go`, `archive.go` |
+| It checks the witness's signature on the checkpoint and the receiver's signature on each receipt; the sequence number of each receipt and the hash of the receipt before it; for each change, the approval's signature by an authority of the trust, its window, its content hash, its single use, the document version, and the owner assertion when the trust has a passkey; and that the checkpoint's count and head are those of the history | `main.go`: `verify`; `passkey.go` |
+| Across the trusts in an archive, a later trust cannot drop or replace the passkey | `archive.go`; `passkey.go`: `samePasskey` |
+| With a cosigned checkpoint, it computes the tree root from every receipt and requires a quorum of cosigners whose keys the verifier supplies. One key never counts twice | `tlog.go` |
+| It is written in Go without calling the Rust code, and the two are compared on the same cases | `scripts/witness_conformance.py` |
 
-Medium examples: a reachable malformed input crashes a deployed verifier, or an adapter silently changes argument bytes while preserving a misleading scope claim. The present bounded local parser and absence of an adapter reduce those specific exposures; future deployment assumptions must be demonstrated.
+Limits: the Go verifier and the Rust code have the same author, so it is a
+second implementation, not an outside review. A verifier or a root that comes
+from the archive proves nothing. A caller who also loses or rolls back their
+trusted root and checkpoint has no protection.
 
-Low examples: confusing errors or partial new output files requiring local cleanup. Ordinary operator-selected file paths are not an arbitrary-file-write vulnerability without a less-privileged attacker reaching that interface.
+### 6. The installer to the system
 
-Confidence is limited to source review and local test evidence. No fuzz campaign, independent crypto audit, dependency vulnerability scan, production deployment assessment, or hardware verification has been performed. Future security findings require separate validation against the relevant version and deployment.
+The installer of the role accounts runs one time as root.
 
-## v0.2 runtime addendum — supersedes earlier absence of execution/state
+| Control | Where |
+|---|---|
+| The status check does not rely on what the installer did. It believes only what root owns, and it checks the end state: the code, the accounts, the folders, the service definitions, the sockets and the account of the process on each socket | `scripts/roles_status.py`; [TCB.md](TCB.md) |
+| The receiver service itself reports the passkey in the trust that it enforces | `openproof-role`: `status` |
+| Three installer regions stay trusted: the creation of the service accounts without a password and without a shell, and the copies of the role code and the role state | `scripts/local_roles.py`, `TCB:` regions |
 
-The runtime architecture is implemented in crates/openproof-runtime/src/lib.rs: init_state creates private SQLite state; execute_inner validates signatures, captured arguments, exact policy bytes and live host time, commits a nonce reservation, writes a bounded artifact, signs a receipt, then records completion. connect rejects missing/symlinked/public state roots; records exposes consumed states. CLI run exposes execute, execution-demo, state and verify-artifact.
+Limits are listed in [TCB.md](TCB.md): the status check does not read access
+control lists or the job that the service manager has loaded, and code in the
+owner's account can change what the owner's own terminal shows. For a check
+that does not depend on that account, the administrator runs the status check
+with `sudo`.
 
-New boundary: untrusted signed request and raw argument bytes enter a trusted gate configured by an operator-owned context, policy, executor key and state directory. A hostile request must not change arguments, invoke an ungranted capability, reuse a nonce, or replace an artifact without failing validation. SQLite serializes reservations across processes; no automatic recovery retries are permitted. State deletion/rollback, same-user modification, untrusted parent directories, compromised keys/clock and lying storage are outside the enforced boundary. No network or arbitrary subprocess adapter exists.
+### 7. The receiver to protected files
 
-Process-exit, race, tampering and policy-denial tests exercise these controls. Power-cut durability is not tested. A local receipt is an executor statement plus an artifact hash, not independent external witnessing. The architecture review for this update was performed sequentially by the implementation author after an attempted independent reviewer was unavailable; this is not an independent audit. See EXECUTION.md for effective files and crash semantics.
+| Control | Where |
+|---|---|
+| Only the receiver service writes the files, in a folder of its own account, after the change is committed. It writes a new file and renames it into place | `publish.rs` |
+| The service does not start when the folder is not a directory that only its account can write | `publish.rs` |
+| The status check reports the folder and each document whose file does not have the approved content | `roles_status.py`; `openproof-role`: `status` |
 
-## v0.3 trust boundary addendum
+Limits are in [PROTECTED-FILES.md](PROTECTED-FILES.md): a new version can be
+late, every local account can read the files, and a program must read a file
+by a path that the agent cannot change.
 
-crates/openproof-trust/src/lib.rs owns TrustBundle validation, validate_snapshot and verify_trusted. The operator-provisioned Anchor pins the root, audience and minimum revision. Signer role windows and a fresh signed snapshot are required. Revocation effective by the evaluation time rejects both current and historical evidence; past timestamps are assertions without external timestamps.
+### 8. The submitter to other witnesses
 
-crates/openproof-runtime/src/lib.rs owns install_trust and pin_snapshot. The latter persists the highest root/audience revision and rejects same-revision different digests inside a SQLite transaction. execute_trusted checks trust before reservation, after lock acquisition, before adapter work and before accepting the receipt. Its nonce namespace uses the root key, preserving consumed nonces across authority-key rotation. State rollback, deletion, root replacement and separate directories remain outside this monotonicity guarantee.
+The submitter carries tree heads and proofs to the witnesses that the owner
+lists. No receipt, approval or document leaves the computer. Each cosignature
+is checked before it is kept, and again by the Go verifier. The submitter is
+not trusted.
 
-CLI install-trust writes an authenticated floor without dispatch. The same-account operator still controls key files, anchors and paths. The legacy execute API deliberately bypasses trust snapshots and is not a revocation-enforcing endpoint. examples/agent/worker.py receives only actor signing input from the supervisor but runs under the same OS account; it is not an isolated hostile process. .github/workflows/validate.yml has read-only permissions and no publication step. scripts/validate.py emits unsigned local provenance, not trusted build attestation. Independent security review for this change is incomplete because the managed scanner failed during setup.
+## Out of scope
 
-## v0.4 boundary additions
+- **The administrator and root.** Root can read and change every account's
+  files. An owner's account with administrator rights is the same as root:
+  use a standard account as the owner.
+- **Physical access, the operating system, the browser, the authenticator
+  and the hardware.**
+- **The owner confirms a prompt for content that they did not mean to
+  approve.** The review page shows the full text first; reading it is the
+  owner's part.
+- **A passkey that the platform syncs.** It is as safe as the platform
+  account that syncs it. The sign counter is not used, so a copied
+  authenticator is not detected.
+- **The moment of passkey set-up.** An attacker in the owner's account at
+  that moment can install a key that they hold. Set up the passkey on a
+  computer that you trust at that time.
+- **A lost passkey.** It cannot be replaced yet. The home then approves no
+  new change.
+- **Dependencies and build tools.** The Rust and Go dependencies are locked.
+  Validation checks the Rust dependencies against the RustSec advisory
+  database and against a list of accepted licenses. That finds known
+  problems only. No
+  release is signed, and no build has been reproduced on a separate machine.
+- **Code outside the trusted list.** A defect there can break a feature or
+  stop OpenProof. [TCB.md](TCB.md) gives the reason, for each area, why it
+  cannot break a guarantee. That reasoning has had no human review.
+- **Experimental code** behind the Cargo feature `experimental`, and the
+  original version 1 crates.
 
-Planned root rotation requires signatures from both roots and an advancing installed revision; it preserves original replay identity and retires old roots locally. A compromised old root is outside this handover guarantee. Trusted operations persist a clock watermark, but state restoration and privileged clock manipulation require external controls. Process-crash tests do not establish hardware durability. The Python trust verifier is a separate implementation and not an independent security review.
+## How this is tested
 
-## v0.5 isolated report workflow
+Every test uses synthetic data, on one computer or in CI. A passing test
+shows that one case behaves as written. It does not show that no defect exists.
 
-Historical, for an experiment (kept at the git tag `experiments-2026-11-08`): The host claude_report adapter sends only a fixed public prompt to the fixed HTTPS Messages endpoint. It uses the host environment credential, bounded output, verified TLS and no redirects/tools/automatic retries. The trusted host broker signs only a bounded fixed-resource report operation. A local Docker actor receives public authorization, exact report bytes and an ephemeral actor seed over stdin. No mounts or network are available; default seccomp, dropped capabilities, non-root UID, no-new-privileges and resource bounds are configured and inspected. Host keys/state remain trusted and outside the worker. Docker/kernel escape resistance is not established by the probes. The model is external, not running inside the container. The offline HTML viewer checks evidence at render time and escapes untrusted text; its supplied anchor and static age must be understood. This new boundary is outside the v0.4 Rust-only independent review.
+- Rust unit tests of the trusted crates, with negative cases.
+- `scripts/tests/test_role_service.py`: the peer check, the message form,
+  each role's operations, tampering, replay, trust updates, protected files.
+- `scripts/tests/test_local_roles.py` (as root, on Linux): install, the
+  workflow through the services, a separation probe from the owner's account
+  and from a third account, and install states that a defective installer
+  could leave.
+- `scripts/tests/test_review_page.py`: the review page's approval check, with
+  its digest matched to the Rust one and every single difference refused.
+- `scripts/passkey_smoke.mjs`: the full passkey workflow in a real browser
+  with a virtual authenticator, with the server's answers changed in flight.
+- `scripts/witness_conformance.py`: the same cases through the Rust and the
+  Go implementations, passkey cases included.
+- `reference/go-witness`: the Go verifier's own tests, with the ways that a
+  cosigned checkpoint must be refused.
+- `fuzz/fuzz_targets`: five fuzz targets (`evidence`, `policy`, `trust`,
+  `witness`, `witness_state`), run in bounded campaigns.
+
+Checked by hand on a Mac only: the launchd install, Touch ID, and the
+protected files ([LOCAL-ROLES.md](LOCAL-ROLES.md),
+[PROTECTED-FILES.md](PROTECTED-FILES.md)).
+
+## Open
+
+1. An independent witness, so that G2's condition can be met.
+2. A human security review of the trusted code.
+3. Replacement of a lost passkey.
+4. A signed release, and a build reproduced by another party.
+
+Change this file in the same change that moves a boundary or adds trusted
+code.

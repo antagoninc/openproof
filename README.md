@@ -146,4 +146,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Protocol changes need a versioning decis
 
 Eligible project source is licensed under **[Apache-2.0](LICENSE)**; dependencies retain their own licenses. Read the [IP boundaries](docs/IP-BOUNDARIES.md). Proprietary Antagon code, models, datasets and credentials do not belong in this repository. Antagon branding is not a grant of trademark rights.
 
-OpenProof is independently authored. No TRACE compatibility, code reuse or security superiority is claimed. Public visibility and release publication require separate owner approval.
+OpenProof is independently authored. No TRACE compatibility, code reuse or security superiority is claimed. The source is public; no versioned release has been published, and each release needs the owner's separate approval.

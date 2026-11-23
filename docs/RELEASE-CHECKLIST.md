@@ -14,7 +14,7 @@
 
 ## Review and operation
 
-- [ ] Deliver the exact private snapshot to a selected human reviewer through an approved channel; record scope/exclusions, findings and independent retest.
+- [ ] Deliver the exact commit to a selected human reviewer; record scope/exclusions, findings and independent retest.
 - [ ] Complete separate-host operator acceptance and record separate control; Docker alone does not satisfy this gate.
 - [ ] Confirm naming, dependency licensing, security contact and disclosure procedure. (Licensing of the source under Apache-2.0 was cleared by counsel on 8 Nov 2026.)
 - [ ] Review all distributable files for secrets and confidential document content; exclude runtime outputs, test homes, private keys, sessions and databases. Do not upload whole validation directories.
@@ -22,7 +22,7 @@
 
 ## Owner decision
 
-- [ ] Owner explicitly approves changing repository visibility (a separate decision from publishing a version).
+- [x] Owner explicitly approves changing repository visibility (a separate decision from publishing a version). Done: the source repository is public since 9 Nov 2026.
 - [ ] Owner explicitly approves the exact release revision, assets and claims.
 
 All unchecked items remain open. Preparing a package, passing CI or obtaining AI feedback does not check the human-review, independent-operator or publication-approval boxes.
